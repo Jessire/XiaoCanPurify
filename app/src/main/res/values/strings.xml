@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">小蚕净化</string>
+    <string name="module_desc">去除小蚕霸王餐的所有广告、弹窗，精简底部导航栏（仅保留首页、订单、我）</string>
+</resources>

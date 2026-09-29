@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.XiaoCanPurify" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:fitsSystemWindows">true</item>
+    </style>
+</resources>
