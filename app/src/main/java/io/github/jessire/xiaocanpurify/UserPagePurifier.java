@@ -15,6 +15,56 @@ public final class UserPagePurifier {
         hookUserV2Fragment(xposed, classLoader);
         hookUserModules(xposed, classLoader);
         hookUserInfoModule(xposed, classLoader);
+        hookVipCarousel(xposed, classLoader);
+    }
+
+    private static void hookVipCarousel(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> module = Class.forName("com.realtech.user.pages.userv2.UserVipModule", false, cl);
+            for (Method method : module.getDeclaredMethods()) {
+                if (!"render".equals(method.getName())) continue;
+                xposed.hook(method).intercept(chain -> {
+                    Object binding = module.getField("binding").get(chain.getThisObject());
+                    hideVipCarousel(binding);
+                    return null;
+                });
+            }
+            Class<?> binding = Class.forName("com.realtech.user.databinding.UserLayoutUserV2SilkBinding", false, cl);
+            Method bind = binding.getDeclaredMethod("bind", View.class);
+            xposed.hook(bind).intercept(chain -> {
+                Object result = chain.proceed();
+                hideVipCarousel(result);
+                return result;
+            });
+            MainHook.log("VIP carousel hidden; withdraw card preserved");
+        } catch (Throwable t) {
+            MainHook.log("VIP carousel hook unavailable: " + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void hideVipCarousel(Object binding) {
+        if (binding == null) return;
+        hideBindingField(binding, "bannerVipCard");
+        hideBindingField(binding, "bannerIndicator");
+        try {
+            Object banner = binding.getClass().getField("bannerVipCard").get(binding);
+            banner.getClass().getMethod("stop").invoke(banner);
+            View card = (View) binding.getClass().getField("cardSilkEarn").get(binding);
+            android.view.ViewGroup.LayoutParams params = card.getLayoutParams();
+            if (params != null) {
+                // Only change horizontal constraints; keep the balance and withdraw button intact.
+                for (String name : new String[]{"endToStart", "rightToLeft"})
+                    params.getClass().getField(name).setInt(params, -1);
+                params.getClass().getField("endToEnd").setInt(params, 0);
+                params.getClass().getField("rightToRight").setInt(params, 0);
+                params.getClass().getField("matchConstraintPercentWidth").setFloat(params, 1f);
+                params.getClass().getField("matchConstraintDefaultWidth").setInt(params, 0);
+                params.width = 0;
+                card.setLayoutParams(params);
+            }
+        } catch (Throwable t) {
+            MainHook.log("VIP carousel layout unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     private static void hookUserV2Fragment(XposedInterface xposed, ClassLoader cl) {

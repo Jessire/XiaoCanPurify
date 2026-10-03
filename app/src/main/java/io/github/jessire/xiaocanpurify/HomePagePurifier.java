@@ -32,11 +32,16 @@ public final class HomePagePurifier {
         hookHideHeadAdapter(xposed, classLoader);
     }
 
-    /**
-     * Aggressively disable pull-to-refresh AND second floor on home page.
-     */
     private static void hookRefreshLayout(XposedInterface xposed, ClassLoader cl) {
-        // Configured on the HomeFragment instance only; never hook global setters recursively.
+        try {
+            Class<?> vm = Class.forName("com.realtech.promotion.pages.home.viewmodel.HomeViewModel", false, cl);
+            Method eligible = vm.getDeclaredMethod("canUseHomeSecondFloor");
+            // The host then installs its normal MaterialHeader and keeps its refresh listener.
+            xposed.hook(eligible).intercept(chain -> false);
+            MainHook.log("Home second floor disabled; ordinary refresh preserved");
+        } catch (Throwable t) {
+            MainHook.log("Failed to hook home second-floor eligibility: " + t);
+        }
     }
 
     /**
@@ -752,13 +757,6 @@ public final class HomePagePurifier {
         for (String name : new String[]{"layoutFab", "flSceondFloor", "lySceondFloorGuide", "layoutSecondHeader"})
             collapseView(asView(field(binding, name)));
         collapseView(asView(field(field(binding, "layoutBottom"), "layoutBottomPlacement")));
-        Object refresh = field(binding, "refresh");
-        if (refresh != null) {
-            for (String name : new String[]{"setEnableRefresh", "setEnableOverScrollDrag", "setEnableOverScrollBounce"}) {
-                try { refresh.getClass().getMethod(name, boolean.class).invoke(refresh, false); }
-                catch (Throwable ignored) {}
-            }
-        }
         View rv = asView(field(binding, "rv"));
         View toolbar = asView(field(binding, "toolBar"));
         if (rv != null && toolbar != null && toolbar.getHeight() > 0) {

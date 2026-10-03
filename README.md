@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-1. **去除所有广告 (All Ads Removal)**
+1. **广告过滤 (Ads Filtering)**
    - **冷启动开屏广告**：自动秒跳 `SplashActivity` / `BaseAdActivity` 进入主界面。
    - **切后台热启动开屏**：拦截 `SplashAdUtils.initAd` 与 `SplashAdPlacementManager.refreshAsync`，彻底阻断回到前台时的开屏广告。
    - **全屏/激励/插屏广告**：拦截并自动关闭穿山甲 (CSJ/Pangle)、优量汇 (GDT)、快手 (Kwad)、Sigmob、Baidu、ToBid/WindMill、Beizi 等第三方 SDK 广告 Activity。
@@ -31,10 +31,26 @@
 4. **网络层过滤 (Network Layer Filtering)**
    - 动态注入 OkHttp Interceptor，针对 `/g/pa` (placement 广告配置)、AdProLink、Sigmob、1rtb、Pangle、GDT、Kwad、Burying 埋点等流量实施本地拦截，返回纯净空响应。
 
+## 最新版本
+
+当前版本: **1.1** (`versionCode=2`), 针对小蚕 **3.21.2** 核对并测试.
+
+- 恢复正常下拉刷新, 只屏蔽下拉进入第二层.
+- 补充首页运营弹窗、详情页 ToBid 广告与 Flutter 广告通道过滤.
+- 移除提现右侧会员轮播及详情页“分享赚豆”浮动入口.
+- 增加报名自动外跳保护及淘宝安装领红包提示拦截.
+
+完整更新内容见 [更新日志](CHANGELOG.md).
+
+## 回归测试
+
+本地运行 `powershell -File tests/run.ps1`, 需准备 JDK 17、Gradle 9.5.1 和 Android SDK 37.
+测试使用 JVM 接口替身调用生产 hook, 与真机验证分别记录. 1.1 的功能候选版已由用户确认实测通过.
+
 ## 构建与安装
 
 - 编译环境：Microsoft JDK 17, Gradle 9.5.1, Android SDK 37 (compileSdk=37, minSdk=26)
-- 产物路径：`XiaoCanPurify-1.0.0-release.apk`
+- 产物路径：`XiaoCanPurify-1.1-release.apk`
 - 安装步骤：
   1. 将生成的 APK 安装到设备。
   2. 在 LSPosed Manager 中启用「小蚕净化」模块。

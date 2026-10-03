@@ -5,12 +5,19 @@ import android.app.Dialog;
 import android.os.Bundle;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 import io.github.libxposed.api.XposedInterface;
 
 public final class PopupBlocker {
+    private static final Map<Object, Boolean> TAOBAO_INSTALL_PROMPTS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
     private PopupBlocker() {}
 
     public static void install(XposedInterface xposed, ClassLoader classLoader) {
@@ -19,7 +26,41 @@ public final class PopupBlocker {
         hookMainViewModelPopups(xposed, classLoader);
         hookSpecificDialogClasses(xposed, classLoader);
         hookKuiklyDialogQueue(xposed, classLoader);
-        hookMiniAppJump(xposed, classLoader);
+        hookTaobaoInstallPrompt(xposed, classLoader);
+        EnrollmentJumpGuard.install(xposed, classLoader);
+    }
+
+    private static void hookTaobaoInstallPrompt(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> customDialog = Class.forName("com.kongzue.dialogx.dialogs.CustomDialog", false, cl);
+            Class<?> redPackUtils = Class.forName("com.realtech.promotion.utils.RedPackUtils", false, cl);
+            Object unit = Class.forName("kotlin.Unit", false, cl).getField("INSTANCE").get(null);
+            Method configure = redPackUtils.getDeclaredMethod("toElemRedPack$lambda$1",
+                    Activity.class, String.class, customDialog);
+            int showHooks = 0;
+            for (Method method : customDialog.getDeclaredMethods()) {
+                if (!"show".equals(method.getName()) || Modifier.isStatic(method.getModifiers())
+                        || method.getReturnType() != customDialog) continue;
+                xposed.hook(method).intercept(chain -> {
+                    Object dialog = chain.getThisObject();
+                    if (!TAOBAO_INSTALL_PROMPTS.containsKey(dialog)) return chain.proceed();
+                    MainHook.log("Blocked Taobao install coupon prompt");
+                    return dialog;
+                });
+                showHooks++;
+            }
+            if (showHooks == 0) throw new NoSuchMethodException("CustomDialog.show");
+            xposed.hook(configure).intercept(chain -> {
+                Object dialog = chain.getArg(2);
+                if (dialog == null) return chain.proceed();
+                // Even dismissing this prompt launches a coupon mini-app. Do not attach its callbacks.
+                TAOBAO_INSTALL_PROMPTS.put(dialog, true);
+                return unit;
+            });
+            MainHook.log("Taobao install prompt guard installed");
+        } catch (Throwable t) {
+            MainHook.log("Taobao install prompt hook unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -139,18 +180,13 @@ public final class PopupBlocker {
         for (String cName : dialogClasses) {
             try {
                 Class<?> dClass = Class.forName(cName, false, cl);
-                for (Method m : dClass.getDeclaredMethods()) {
+                for (Method m : dClass.getMethods()) {
                     if ("show".equals(m.getName())) {
                         xposed.hook(m).intercept(chain -> {
+                            Object dialog = chain.getThisObject();
+                            if (!dClass.isInstance(dialog)) return chain.proceed();
                             MainHook.log("Blocked " + cName + ".show");
-                            dismissIfDialog(chain.getThisObject());
-                            return null;
-                        });
-                    } else if ("onCreate".equals(m.getName()) && m.getParameterCount() == 1) {
-                        xposed.hook(m).intercept(chain -> {
-                            MainHook.log("Intercepted " + cName + ".onCreate");
-                            dismissIfDialog(chain.getThisObject());
-                            return null;
+                            return m.getReturnType().isInstance(dialog) ? dialog : null;
                         });
                     }
                 }
@@ -201,6 +237,7 @@ public final class PopupBlocker {
         if (tag == null) return false;
         String t = tag.toLowerCase(Locale.ROOT);
         return t.contains("maintomin")
+                || t.startsWith("home_up_")
                 || t.contains("openschoolshare")
                 || t.contains("past_board_permission")
                 || t.contains("timeerror")
@@ -218,50 +255,6 @@ public final class PopupBlocker {
                 || t.contains("annual")
                 || t.contains("ops_popup")
                 || t.contains("invite");
-    }
-
-    /**
-     * The app launches Meituan/JD/Eleme via WeChat mini-apps after enrollment
-     * or store navigation. Block every openMiniApp call at the common entry.
-     */
-    private static void hookMiniAppJump(XposedInterface xposed, ClassLoader cl) {
-        try {
-            Class<?> funcs = Class.forName("com.realtech.common.ui.mp.WeChatFuncs", false, cl);
-            Class<?> unit = Class.forName("kotlin.Unit", false, cl);
-            Object unitInstance = unit.getField("INSTANCE").get(null);
-            int hooked = 0;
-            for (Method m : funcs.getDeclaredMethods()) {
-                if (!m.getName().startsWith("openMiniApp")) continue;
-                xposed.hook(m).intercept(chain -> {
-                    MainHook.log("Blocked WeChatFuncs mini-app open");
-                    return unitInstance;
-                });
-                hooked++;
-            }
-            MainHook.log("Hooked WeChatFuncs openMiniApp x" + hooked);
-        } catch (Throwable t) {
-            MainHook.log("Failed to hook WeChatFuncs: " + t);
-        }
-        try {
-            Class<?> wxApi = Class.forName("com.tencent.mm.opensdk.openapi.WXApiImplV10", false, cl);
-            for (Method m : wxApi.getMethods()) {
-                if (!"sendReq".equals(m.getName())) continue;
-                xposed.hook(m).intercept(chain -> {
-                    Object req = chain.getArgs().size() > 0 ? chain.getArg(0) : null;
-                    if (req == null) return chain.proceed();
-                    String type = req.getClass().getSimpleName();
-                    if (type.contains("LaunchMiniProgram")) {
-                        MainHook.log("Blocked WXLaunchMiniProgram via IWXAPI");
-                        return Boolean.TRUE;
-                    }
-                    return chain.proceed();
-                });
-                MainHook.log("Hooked IWXAPI.sendReq");
-                break;
-            }
-        } catch (Throwable t) {
-            MainHook.log("Failed to hook IWXAPI: " + t);
-        }
     }
 
     private static boolean isMarketingDialogInfo(Object dialogInfo) {

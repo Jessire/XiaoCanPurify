@@ -147,6 +147,13 @@ public final class MainHook extends XposedModule {
         }
 
         try {
+            DetailPagePurifier.install(xposed, classLoader);
+            log("DetailPagePurifier installed successfully.");
+        } catch (Throwable t) {
+            log("DetailPagePurifier install error: " + t);
+        }
+
+        try {
             UserPagePurifier.install(xposed, classLoader);
             log("UserPagePurifier installed successfully.");
         } catch (Throwable t) {

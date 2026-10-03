@@ -252,6 +252,7 @@ public final class AdBlocker {
     }
 
     private static void hookFlutterAdPlugins(XposedInterface xposed, ClassLoader cl) {
+        FlutterAdBlocker.install(xposed, cl);
         // AmSdkPlugin
         try {
             Class<?> amPlugin = Class.forName("com.realtech.am_sdk_plugin.AmSdkPlugin", false, cl);
@@ -267,32 +268,6 @@ public final class AdBlocker {
             for (Method m : amHandler.getDeclaredMethods()) {
                 if ("loadAd".equals(m.getName()) || "show".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> null);
-                }
-            }
-        } catch (Throwable ignored) {}
-
-        // WindmillAdPluginDelegate
-        try {
-            Class<?> wmDelegate = Class.forName("com.windmill.windmill_ad_plugin.WindmillAdPluginDelegate", false, cl);
-            for (Method m : wmDelegate.getDeclaredMethods()) {
-                if ("onMethodCall".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        Object call = chain.getArg(0);
-                        Object result = chain.getArg(1);
-                        if (call != null && result != null) {
-                            try {
-                                Method getMethod = call.getClass().getMethod("getMethod");
-                                String methodName = (String) getMethod.invoke(call);
-                                if (methodName != null && (methodName.contains("load") || methodName.contains("show") || methodName.contains("Ready"))) {
-                                    Method success = result.getClass().getMethod("success", Object.class);
-                                    success.invoke(result, (Object) null);
-                                    return null;
-                                }
-                            } catch (Throwable ignored) {}
-                        }
-                        return chain.proceed();
-                    });
-                    break;
                 }
             }
         } catch (Throwable ignored) {}
@@ -370,26 +345,6 @@ public final class AdBlocker {
             MainHook.log("Hooked WMBannerView.loadAd");
         } catch (Throwable ignored) {}
 
-        // NativeAdBridge
-        try {
-            Class<?> adBridge = Class.forName("com.realtech.xiaocan.flutter.NativeAdBridge", false, cl);
-            for (Method m : adBridge.getDeclaredMethods()) {
-                if ("createBridge$lambda$3".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        Object result = chain.getArg(1);
-                        if (result != null) {
-                            try {
-                                Method success = result.getClass().getMethod("success", Object.class);
-                                success.invoke(result, (Object) null);
-                            } catch (Throwable ignored) {}
-                        }
-                        return null;
-                    });
-                    MainHook.log("Hooked NativeAdBridge.createBridge$lambda$3");
-                    break;
-                }
-            }
-        } catch (Throwable ignored) {}
     }
 
     private static void hookAdActivities(XposedInterface xposed) {
