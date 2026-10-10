@@ -16,6 +16,18 @@ public final class PolicyTests {
         check(!WithdrawAdPolicy.isAdPlacement("withdraw", Map.of("resource_slug", "user_withdraw_dialog_ad")), "withdraw transaction must not be blocked");
         check(!WithdrawAdPolicy.isAdPlacement("matchplacement", Map.of("resource_slug", "order_content")), "business placement must remain available");
         check(!WithdrawAdPolicy.isAdPlacement("matchplacement", Map.of("resource_slug", "user_withdraw_dialog_ad", "placement", "order_content")), "mixed batch must not be dropped");
+        check(WithdrawAdPolicy.isAdPlacement("matchplacement", Map.of("resource_slug", "WITHDRAWAL_SUCCESS_POPUP")), "withdraw success popup selector");
+        check(WithdrawAdPolicy.isAdPlacement("matchplacement", Map.of("resource_slug", "WITHDRAWALPAGE_POPUP")), "withdraw page popup selector");
+        check(WithdrawAdPolicy.isAdPlacement("matchplacement", Map.of("resource_slug", "WITHDRAWAL_SUCCESS_POPUP", "placement_id", "12345")), "withdraw popup with numeric id selector");
+        check(WithdrawAdPolicy.isAdPlacement("PlacementMatchService", Map.of(
+                "resource_slug", java.util.List.of("WITHDRAWAL_SUCCESS_POPUP"),
+                "silk_id", "123",
+                "city_code", "010"
+        )), "real withdraw success popup payload with list resource_slug");
+        check(WithdrawAdPolicy.isAdPlacement("PlacementMatchService", Map.of(
+                "placement_id", "8876",
+                "resource_id", "999"
+        )), "real withdraw placement id 8876");
     }
     private static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
 }

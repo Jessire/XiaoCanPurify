@@ -110,6 +110,11 @@ public final class NetworkAdInterceptor {
                 || s.contains("user_withdraw_banner")
                 || s.contains("user_withdraw_dialog_ad")
                 || s.contains("withdrawal_success_popup")
+                || s.contains("withdrawalpage_popup")
+                || s.contains("withdraw_pop_up")
+                || s.contains("withdraw_placement")
+                || s.contains("withdraw_flow")
+                || s.contains("withdrawupactivitydialog")
                 || s.contains("ismemberbysilkid")
                 || s.contains("listexchangeproduct"));
     }
@@ -212,7 +217,12 @@ public final class NetworkAdInterceptor {
                     || url.contains("kwad")
                     || url.contains("mobads.baidu.com")
                     || url.contains("buryingapi.xiaocantech.com")
-                    || url.contains("sensorsdata.xiaocanapp.com");
+                    || url.contains("sensorsdata.xiaocanapp.com")
+                    || url.contains("user_withdraw_dialog_ad")
+                    || url.contains("user_withdraw_banner")
+                    || url.contains("withdrawal_success_popup")
+                    || url.contains("withdrawalpage_popup")
+                    || url.contains("withdraw_pop_up");
         }
 
         private Object createMockJsonResponse(Object request, String json) throws Exception {

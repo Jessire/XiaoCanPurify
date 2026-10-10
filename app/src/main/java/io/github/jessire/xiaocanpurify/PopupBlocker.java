@@ -254,7 +254,9 @@ public final class PopupBlocker {
                 || t.contains("share")
                 || t.contains("annual")
                 || t.contains("ops_popup")
-                || t.contains("invite");
+                || t.contains("invite")
+                || t.contains("withdraw")
+                || t.contains("withdrawal");
     }
 
     private static boolean isMarketingDialogInfo(Object dialogInfo) {
@@ -272,7 +274,9 @@ public final class PopupBlocker {
                 || str.contains("gift")
                 || str.contains("share")
                 || str.contains("ops")
-                || str.contains("annual");
+                || str.contains("annual")
+                || str.contains("withdraw")
+                || str.contains("withdrawal");
     }
 
     private static void dismissIfDialog(Object obj) {

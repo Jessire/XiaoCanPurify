@@ -182,6 +182,10 @@ public final class RegressionTests {
         call(bridge, null, false, new MethodCall("postService", Map.of("service", "MatchPlacement", "data",
                 Map.of("resource_slug", "user_withdraw_dialog_ad"))), reply);
         if (reply.replies != 1 || reply.value != null) throw new AssertionError("Withdraw ad callback must settle as no data");
+        Reply replySuccessPopup = new Reply();
+        call(bridge, null, false, new MethodCall("postService", Map.of("service", "MatchPlacement", "data",
+                Map.of("resource_slug", "WITHDRAWAL_SUCCESS_POPUP", "placement_id", "12345"))), replySuccessPopup);
+        if (replySuccessPopup.replies != 1 || replySuccessPopup.value != null) throw new AssertionError("Withdrawal success popup callback must settle as no data");
         call(bridge, null, true, new MethodCall("postService", Map.of("service", "Withdraw", "data", Map.of("amount", 1))), new Reply());
         call(bridge, null, true, new MethodCall("postService", Map.of("service", "GetClientWithdrawList")), new Reply());
     }

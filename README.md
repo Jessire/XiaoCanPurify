@@ -33,8 +33,9 @@
 
 ## 最新版本
 
-当前版本: **1.1** (`versionCode=2`), 针对小蚕 **3.21.2** 核对并测试.
+当前版本: **1.2** (`versionCode=3`), 针对小蚕 **3.21.2** 核对并测试.
 
+- 补全提现页与提现成功弹窗广告位拦截 (`WITHDRAWAL_SUCCESS_POPUP`、`WITHDRAWALPAGE_POPUP`、广告位 `8876` 及列表型 `resource_slug` 参数), 不丢弃混合业务广告位请求.
 - 恢复正常下拉刷新, 只屏蔽下拉进入第二层.
 - 补充首页运营弹窗、详情页 ToBid 广告与 Flutter 广告通道过滤.
 - 移除提现右侧会员轮播及详情页“分享赚豆”浮动入口.
@@ -45,12 +46,12 @@
 ## 回归测试
 
 本地运行 `powershell -File tests/run.ps1`, 需准备 JDK 17、Gradle 9.5.1 和 Android SDK 37.
-测试使用 JVM 接口替身调用生产 hook, 与真机验证分别记录. 1.1 的功能候选版已由用户确认实测通过.
+测试使用 JVM 接口替身调用生产 hook, 与真机验证分别记录.
 
 ## 构建与安装
 
 - 编译环境：Microsoft JDK 17, Gradle 9.5.1, Android SDK 37 (compileSdk=37, minSdk=26)
-- 产物路径：`XiaoCanPurify-1.1-release.apk`
+- 产物路径：`XiaoCanPurify-1.2-release.apk`
 - 安装步骤：
   1. 将生成的 APK 安装到设备。
   2. 在 LSPosed Manager 中启用「小蚕净化」模块。
