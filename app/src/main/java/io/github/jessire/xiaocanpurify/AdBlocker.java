@@ -1,5 +1,8 @@
 package io.github.jessire.xiaocanpurify;
 
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.*;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
+
 import android.app.Activity;
 import android.content.Context;
 import android.os.Bundle;
@@ -20,15 +23,38 @@ public final class AdBlocker {
     private AdBlocker() {}
 
     public static void install(XposedInterface xposed, ClassLoader classLoader) {
+        hookAdInitTask(xposed, classLoader);
         hookSplashAdFactory(xposed, classLoader);
         hookSplashAdUtils(xposed, classLoader);
         hookSilentTaskEngine(xposed, classLoader);
         hookFeedAndBannerAds(xposed, classLoader);
-        hookUserCommerceGrid(xposed, classLoader);
         hookFloatingAds(xposed, classLoader);
         hookSearchRightBanner(xposed, classLoader);
         hookFlutterAdPlugins(xposed, classLoader);
         hookAdActivities(xposed);
+    }
+
+    private static boolean allAdSdkPlacementsEnabled() {
+        return LayoutSettings.coldEnabled(HOME_FEED) && LayoutSettings.coldEnabled(HOME_TOP)
+                && LayoutSettings.coldEnabled(ORDER_AD) && LayoutSettings.coldEnabled(ORDER_VOUCHER_NATIVE_AD)
+                && LayoutSettings.coldEnabled(DETAIL_AD) && LayoutSettings.coldEnabled(USER_AD) && LayoutSettings.coldEnabled(MAIN_FLOAT);
+    }
+
+    private static void hookAdInitTask(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> initTask = Class.forName("com.realtech.xiaocan.tasks.AdInitTaskKt", false, cl);
+            Method initAd = initTask.getDeclaredMethod("initAd", Context.class);
+            xposed.hook(initAd).intercept(chain -> {
+                if (LayoutSettings.isVerifiedHost3212() && allAdSdkPlacementsEnabled()) {
+                    MainHook.log("Skipped AdInitTaskKt.initAd (all ad SDK placements disabled)");
+                    return null;
+                }
+                return chain.proceed();
+            });
+            MainHook.log("Hooked AdInitTaskKt.initAd");
+        } catch (Throwable t) {
+            MainHook.log("AdInitTaskKt hook unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     private static void hookSplashAdFactory(XposedInterface xposed, ClassLoader cl) {
@@ -119,6 +145,7 @@ public final class AdBlocker {
             for (Method m : holderClass.getDeclaredMethods()) {
                 if ("bind".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_FEED)) return chain.proceed();
                         Object holder = chain.getThisObject();
                         if (holder != null) {
                             try {
@@ -149,6 +176,7 @@ public final class AdBlocker {
             for (Method m : bannerHolderClass.getDeclaredMethods()) {
                 if ("bind".equals(m.getName()) || "renderBanner".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_TOP)) return chain.proceed();
                         Object holder = chain.getThisObject();
                         if (holder != null) {
                             try {
@@ -174,40 +202,12 @@ public final class AdBlocker {
         } catch (Throwable ignored) {}
     }
 
-    private static void hookUserCommerceGrid(XposedInterface xposed, ClassLoader cl) {
-        try {
-            Class<?> gridModuleClass = Class.forName("com.realtech.user.pages.userv2.UserCommerceGridModule", false, cl);
-            for (Method m : gridModuleClass.getDeclaredMethods()) {
-                if ("render".equals(m.getName()) || "load".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        Object module = chain.getThisObject();
-                        if (module != null) {
-                            try {
-                                Field bf = module.getClass().getField("binding");
-                                Object binding = bf.get(module);
-                                if (binding != null) {
-                                    Method getRoot = binding.getClass().getMethod("getRoot");
-                                    View root = (View) getRoot.invoke(binding);
-                                    if (root != null) {
-                                        root.setVisibility(View.GONE);
-                                    }
-                                }
-                            } catch (Throwable ignored) {}
-                        }
-                        return null;
-                    });
-                }
-            }
-            MainHook.log("Hooked UserCommerceGridModule");
-        } catch (Throwable ignored) {}
-    }
-
     private static void hookFloatingAds(XposedInterface xposed, ClassLoader cl) {
         try {
             Class<?> floatingClass = Class.forName("com.realtech.xiaocan.ad.floating.FloatingAdManager", false, cl);
             for (Method m : floatingClass.getDeclaredMethods()) {
                 if ("show".equals(m.getName()) || "load".equals(m.getName()) || "attach".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(MAIN_FLOAT) ? null : chain.proceed());
                 }
             }
             MainHook.log("Hooked FloatingAdManager");
@@ -220,6 +220,7 @@ public final class AdBlocker {
             for (Method m : barLayoutClass.getDeclaredMethods()) {
                 if ("renderSearchRightBanner".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (HomePagePurifier.ownsLiveSearchBanner() || !enabled(HOME_SEARCH_BANNER)) return chain.proceed();
                         Object barLayout = chain.getThisObject();
                         try {
                             Field searchViewField = barLayout.getClass().getField("searchView");

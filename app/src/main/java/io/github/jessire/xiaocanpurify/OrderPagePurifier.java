@@ -1,211 +1,197 @@
 package io.github.jessire.xiaocanpurify;
 
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.*;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
+
 import android.view.View;
 import android.view.ViewGroup;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 
 import io.github.libxposed.api.XposedInterface;
 
 public final class OrderPagePurifier {
+    private static final ThreadLocal<Boolean> RENDERING_HEADER = new ThreadLocal<>();
+    private static final LayoutSettings.Item[] HEADER_RULES = {
+            ORDER_CHALLENGE, ORDER_CHALLENGE, ORDER_INVITE, ORDER_INVITE, ORDER_TIP
+    };
+
     private OrderPagePurifier() {}
 
     public static void install(XposedInterface xposed, ClassLoader classLoader) {
+        OrderLiveViews.install();
         hookOrderTypeFragment(xposed, classLoader);
         hookOrderListFragment(xposed, classLoader);
-        hookOrderHolders(xposed, classLoader);
+        hookHolder(xposed, classLoader, "OrderBannerHolder", ORDER_FEED, 6);
+        hookHolder(xposed, classLoader, "OrderNativeadHolder", ORDER_AD, 2);
+        hookRewardButtons(xposed, classLoader);
     }
 
-    /**
-     * Purge top banner/challenge and promo entry in OrderTypeFragment.
-     */
     private static void hookOrderTypeFragment(XposedInterface xposed, ClassLoader cl) {
         try {
-            Class<?> typeFragClass = Class.forName("com.realtech.my_order.ui.OrderTypeFragment", false, cl);
-
-            for (Method m : typeFragClass.getDeclaredMethods()) {
-                String mName = m.getName();
-                if ("lazyInitView".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> {
-                        Object result = chain.proceed();
-                        purgeOrderTypeViews(chain.getThisObject());
-                        return result;
-                    });
-                    MainHook.log("Hooked OrderTypeFragment.lazyInitView");
-                } else if ("renderStickyBar".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> {
-                        List<Object> args = chain.getArgs();
-                        if (!args.isEmpty() && args.get(0) != null) {
-                            hideField(args.get(0), "clMachallenge");
+            Class<?> fragment = Class.forName("com.realtech.my_order.ui.OrderTypeFragment", false, cl);
+            for (Method method : fragment.getDeclaredMethods()) {
+                String name = method.getName();
+                int count = method.getParameterCount();
+                boolean isStatic = Modifier.isStatic(method.getModifiers());
+                boolean sticky = !isStatic && name.equals("renderStickyBar") && count == 2;
+                boolean invite = !isStatic && name.equals("initFreeOrderInviteView") && count == 1;
+                boolean tipsObserver = isStatic && name.equals("initData$lambda$4") && count == 2;
+                boolean observesHeader = !isStatic && ((name.equals("lazyInitView") && count == 0)
+                        || (name.equals("onViewCreated") && count == 2)
+                        || (name.equals("restoreOrderTips") && count == 0)
+                        || (name.equals("bindOrderCompetitorChallenge") && count == 1)
+                        || (name.equals("applyOrderStickyMutex") && count == 0));
+                if (!sticky && !invite && !tipsObserver && !observesHeader) continue;
+                if ((sticky || invite) && method.getReturnType() != void.class) continue;
+                xposed.hook(method).intercept(chain -> {
+                    Object receiver = tipsObserver ? chain.getArg(0) : chain.getThisObject();
+                    View[] views = headerViews(sticky ? chain.getArg(0)
+                            : OrderLiveViews.callGetter(receiver, "getBinding"));
+                    if (sticky && enabled(ORDER_CHALLENGE)) {
+                        OrderLiveViews.skipped(views[0], () -> enabled(ORDER_CHALLENGE), OrderLiveViews.Size.NONE);
+                        return null;
+                    }
+                    if (invite && enabled(ORDER_INVITE)) {
+                        for (int i = 2; i <= 3; i++) {
+                            OrderLiveViews.skipped(views[i], () -> enabled(ORDER_INVITE), OrderLiveViews.Size.NONE);
                         }
                         return null;
-                    });
-                    MainHook.log("Hooked OrderTypeFragment.renderStickyBar");
-                } else if ("initFreeOrderInviteView".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> {
-                        purgeOrderTypeViews(chain.getThisObject());
-                        return null;
-                    });
-                    MainHook.log("Hooked OrderTypeFragment.initFreeOrderInviteView");
-                }
+                    }
+                    // The stock header checks other views' visibility to choose its own.
+                    // Suspend our overlays during the normal render, including nested callbacks.
+                    boolean outer = RENDERING_HEADER.get() == null;
+                    if (outer) {
+                        RENDERING_HEADER.set(true);
+                        for (View view : views) OrderLiveViews.suspend(view);
+                    }
+                    if (sticky) OrderLiveViews.beforeBind(views[0]);
+                    if (invite) {
+                        OrderLiveViews.beforeBind(views[2]);
+                        OrderLiveViews.beforeBind(views[3]);
+                    }
+                    try {
+                        return chain.proceed();
+                    } finally {
+                        if (outer) {
+                            RENDERING_HEADER.remove();
+                            for (int i = 0; i < views.length; i++) {
+                                LayoutSettings.Item rule = HEADER_RULES[i];
+                                OrderLiveViews.track(views[i], () -> enabled(rule), OrderLiveViews.Size.NONE);
+                            }
+                        }
+                    }
+                });
             }
         } catch (Throwable t) {
             MainHook.log("Failed to hook OrderTypeFragment: " + t);
         }
     }
 
-    private static void purgeOrderTypeViews(Object fragment) {
-        if (fragment == null) return;
-        try {
-            Method getBinding = fragment.getClass().getMethod("getBinding");
-            Object binding = getBinding.invoke(fragment);
-            if (binding != null) {
-                hideField(binding, "clMachallenge");
-                hideField(binding, "llFreeOrder");
-                hideField(binding, "ivTips");
-                hideField(binding, "ivFreeOrderTag");
-            }
-        } catch (Throwable ignored) {}
+    private static View[] headerViews(Object binding) {
+        Object mini = OrderLiveViews.getField(binding, "layoutChallengeCardOrder");
+        return new View[]{fieldView(binding, "clMachallenge"),
+                OrderLiveViews.asView(OrderLiveViews.callGetter(mini, "getRoot")),
+                fieldView(binding, "llFreeOrder"), fieldView(binding, "ivFreeOrderTag"),
+                fieldView(binding, "ivTips")};
     }
 
-    /**
-     * Prevent feed images, native ads, and challenge popups in OrderListFragment.
-     */
+    private static View fieldView(Object binding, String name) {
+        return OrderLiveViews.asView(OrderLiveViews.getField(binding, name));
+    }
+
     private static void hookOrderListFragment(XposedInterface xposed, ClassLoader cl) {
         try {
-            Class<?> listFragClass = Class.forName("com.realtech.my_order.ui.OrderListFragment", false, cl);
-
-            for (Method m : listFragClass.getDeclaredMethods()) {
-                String mName = m.getName();
-                if ("renderFeedImage".equals(mName)
-                        || "renderNativeAd".equals(mName)
-                        || "renderChallenge".equals(mName)
-                        || "showMaChallengePopUp".equals(mName)
-                        || "renderOrderTip".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> null);
-                    MainHook.log("Hooked OrderListFragment." + mName + " -> blocked");
+            Class<?> fragment = Class.forName("com.realtech.my_order.ui.OrderListFragment", false, cl);
+            for (Method method : fragment.getDeclaredMethods()) {
+                if (method.getReturnType() != void.class || Modifier.isStatic(method.getModifiers())) continue;
+                LayoutSettings.Item item;
+                switch (method.getName()) {
+                    case "renderFeedImage": item = ORDER_FEED; break;
+                    case "renderNativeAd": item = ORDER_AD; break;
+                    case "renderChallenge": item = ORDER_CHALLENGE; break;
+                    case "renderOrderTip": item = ORDER_TIP; break;
+                    case "showMaChallengePopUp": // Existing popup policy is not a layout option.
+                        xposed.hook(method).intercept(chain -> null);
+                        continue;
+                    default: continue;
                 }
+                xposed.hook(method).intercept(chain -> enabled(item) ? null : chain.proceed());
             }
         } catch (Throwable t) {
             MainHook.log("Failed to hook OrderListFragment: " + t);
         }
     }
 
-    /**
-     * Purge order list ad holders and promo buttons ("领1k元宝").
-     */
-    private static void hookOrderHolders(XposedInterface xposed, ClassLoader cl) {
-        // 1. OrderBannerHolder
+    private static void hookHolder(XposedInterface xposed, ClassLoader cl, String name,
+                                   LayoutSettings.Item rule, int parameterCount) {
         try {
-            Class<?> bannerHolderClass = Class.forName("com.realtech.my_order.adapter.holder.OrderBannerHolder", false, cl);
-            for (Method m : bannerHolderClass.getDeclaredMethods()) {
-                if ("bind".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        collapseHolderView(chain.getThisObject());
+            Class<?> holder = Class.forName("com.realtech.my_order.adapter.holder." + name, false, cl);
+            for (Method method : holder.getDeclaredMethods()) {
+                if (!method.getName().equals("bind") || method.isBridge() || Modifier.isStatic(method.getModifiers())
+                        || method.getReturnType() != void.class || method.getParameterCount() != parameterCount) continue;
+                xposed.hook(method).intercept(chain -> {
+                    Object binding = OrderLiveViews.callGetter(chain.getThisObject(), "getBinding");
+                    View root = OrderLiveViews.asView(OrderLiveViews.callGetter(binding, "getRoot"));
+                    if (enabled(rule)) {
+                        OrderLiveViews.skipped(root, () -> enabled(rule), OrderLiveViews.Size.ROW);
                         return null;
-                    });
-                    MainHook.log("Hooked OrderBannerHolder.bind");
-                    break;
-                }
+                    }
+                    OrderLiveViews.beforeBind(root);
+                    Object result = chain.proceed();
+                    OrderLiveViews.track(root, () -> enabled(rule), OrderLiveViews.Size.ROW);
+                    return result;
+                });
             }
         } catch (Throwable t) {
-            MainHook.log("Failed to hook OrderBannerHolder: " + t);
+            MainHook.log("Failed to hook " + name + ": " + t);
         }
+    }
 
-        // 2. OrderNativeadHolder
+    private static void hookRewardButtons(XposedInterface xposed, ClassLoader cl) {
         try {
-            Class<?> nativeadHolderClass = Class.forName("com.realtech.my_order.adapter.holder.OrderNativeadHolder", false, cl);
-            for (Method m : nativeadHolderClass.getDeclaredMethods()) {
-                if ("bind".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        collapseHolderView(chain.getThisObject());
-                        return null;
-                    });
-                    MainHook.log("Hooked OrderNativeadHolder.bind");
-                    break;
-                }
-            }
-        } catch (Throwable t) {
-            MainHook.log("Failed to hook OrderNativeadHolder: " + t);
-        }
-
-        // 3. OrderNormalHolder action buttons (filter out "领1k元宝") and tip banner
-        try {
-            Class<?> normalHolderClass = Class.forName("com.realtech.my_order.adapter.holder.OrderNormalHolder", false, cl);
-            for (Method m : normalHolderClass.getDeclaredMethods()) {
-                if ("bindActionButtons".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        Object container = chain.getArg(0);
-                        List<?> actions = (List<?>) chain.getArg(1);
-                        if (actions != null) {
-                            List<Object> filtered = new ArrayList<>();
-                            for (Object act : actions) {
-                                if (act != null) {
-                                    String title = "";
-                                    try {
-                                        Method getTitle = act.getClass().getMethod("getTitle");
-                                        Object t = getTitle.invoke(act);
-                                        if (t != null) title = t.toString();
-                                    } catch (Throwable ignored) {}
-                                    if (title.contains("元宝") || title.contains("奖励") || title.contains("1k") || title.contains("红包")) {
-                                        MainHook.log("Purged order action button: " + title);
-                                        continue;
-                                    }
-                                    filtered.add(act);
-                                }
-                            }
-                            return chain.proceed(new Object[]{ container, filtered });
+            Class<?> holder = Class.forName("com.realtech.my_order.adapter.holder.OrderNormalHolder", false, cl);
+            for (Method method : holder.getDeclaredMethods()) {
+                if (!method.getName().equals("bindActionButtons") || method.getParameterCount() != 2
+                        || method.getReturnType() != void.class || Modifier.isStatic(method.getModifiers())
+                        || !ViewGroup.class.isAssignableFrom(method.getParameterTypes()[0])
+                        || method.getParameterTypes()[1] != List.class) continue;
+                xposed.hook(method).intercept(chain -> {
+                    if (!(chain.getArg(0) instanceof ViewGroup container)
+                            || !(chain.getArg(1) instanceof List<?> actions)) return chain.proceed();
+                    if (enabled(ORDER_REWARD)) {
+                        List<Object> filtered = new ArrayList<>();
+                        for (Object action : actions) {
+                            if (!isReward(action)) filtered.add(action);
                         }
-                        return chain.proceed();
-                    });
-                    MainHook.log("Hooked OrderNormalHolder.bindActionButtons");
-                    break;
-                }
+                        return filtered.size() == actions.size() ? chain.proceed()
+                                : chain.proceed(new Object[]{container, filtered});
+                    }
+                    Object result = chain.proceed();
+                    // The verified renderer replaces the children, one root per action in order.
+                    if (container.getChildCount() == actions.size()) {
+                        for (int i = 0; i < actions.size(); i++) {
+                            if (isReward(actions.get(i))) {
+                                OrderLiveViews.track(container.getChildAt(i), () -> enabled(ORDER_REWARD),
+                                        OrderLiveViews.Size.NONE);
+                            }
+                        }
+                    }
+                    return result;
+                });
             }
         } catch (Throwable t) {
             MainHook.log("Failed to hook OrderNormalHolder: " + t);
         }
     }
 
-    private static void collapseHolderView(Object holder) {
-        if (holder == null) return;
-        try {
-            Method getBinding = holder.getClass().getMethod("getBinding");
-            Object binding = getBinding.invoke(holder);
-            if (binding != null) {
-                Method getRoot = binding.getClass().getMethod("getRoot");
-                View root = (View) getRoot.invoke(binding);
-                if (root != null) {
-                    root.setVisibility(View.GONE);
-                    ViewGroup.LayoutParams lp = root.getLayoutParams();
-                    if (lp != null) {
-                        lp.height = 0;
-                        lp.width = 0;
-                        if (lp instanceof ViewGroup.MarginLayoutParams) {
-                            ((ViewGroup.MarginLayoutParams) lp).setMargins(0, 0, 0, 0);
-                        }
-                        root.setLayoutParams(lp);
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-    }
-
-    private static void hideField(Object binding, String fieldName) {
-        try {
-            Field field = binding.getClass().getField(fieldName);
-            View view = (View) field.get(binding);
-            if (view != null) {
-                view.setVisibility(View.GONE);
-                ViewGroup.LayoutParams lp = view.getLayoutParams();
-                if (lp instanceof ViewGroup.MarginLayoutParams) {
-                    ((ViewGroup.MarginLayoutParams) lp).setMargins(0, 0, 0, 0);
-                    view.setLayoutParams(lp);
-                }
-            }
-        } catch (Throwable ignored) {}
+    private static boolean isReward(Object action) {
+        Object value = OrderLiveViews.callGetter(action, "getTitle");
+        if (!(value instanceof CharSequence)) return false;
+        String title = value.toString();
+        return title.contains("元宝") || title.contains("奖励") || title.contains("1k") || title.contains("红包");
     }
 }

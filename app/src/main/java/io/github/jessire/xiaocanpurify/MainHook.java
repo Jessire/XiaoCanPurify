@@ -18,9 +18,11 @@ public final class MainHook extends XposedModule {
     public static final String LOG_TAG = "XiaoCanPurify";
     private static final AtomicBoolean HOOKED = new AtomicBoolean(false);
     private static volatile MainHook instance;
+    private static volatile boolean targetMainProcess;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
+        targetMainProcess = TARGET_PACKAGE.equals(param.getProcessName());
         instance = this;
         log("XiaoCanPurify API 102 module loaded.");
     }
@@ -33,14 +35,12 @@ public final class MainHook extends XposedModule {
         instance = this;
         log("Target package ready: " + param.getPackageName());
 
-        ClassLoader initialLoader = param.getClassLoader();
-        if (canLoadTargetClasses(initialLoader)) {
-            installAll(this, initialLoader);
-            return;
-        }
-
-        // App uses ShellApplication / Aliyun Jiagu unpacker, hook Application & Activity lifecycle
         hookLifecycle(this);
+        ClassLoader initialLoader = param.getClassLoader();
+        if (LayoutSettings.hasBaseline() && canLoadTargetClasses(initialLoader)) {
+            installAll(this, initialLoader);
+        }
+        // The lifecycle hooks also handle late-unpacked host classes.
     }
 
     private static boolean canLoadTargetClasses(ClassLoader cl) {
@@ -55,13 +55,15 @@ public final class MainHook extends XposedModule {
 
     private void hookLifecycle(XposedInterface xposed) {
         try {
-            Method attachBaseContext = Application.class.getDeclaredMethod("attachBaseContext", Context.class);
+            Method attachBaseContext = android.content.ContextWrapper.class.getDeclaredMethod("attachBaseContext", Context.class);
             xposed.hook(attachBaseContext).intercept(chain -> {
-                Object result = chain.proceed();
+                if (!(chain.getThisObject() instanceof Application)) return chain.proceed();
                 Context context = (Context) chain.getArg(0);
+                LayoutSettings.initialize(context);
+                Object result = chain.proceed();
                 if (context != null) {
                     ClassLoader cl = context.getClassLoader();
-                    if (canLoadTargetClasses(cl)) {
+                    if (LayoutSettings.hasBaseline() && canLoadTargetClasses(cl)) {
                         installAll(xposed, cl);
                     }
                 }
@@ -77,8 +79,9 @@ public final class MainHook extends XposedModule {
                 Object result = chain.proceed();
                 Application app = (Application) chain.getThisObject();
                 if (app != null) {
+                    LayoutSettings.initialize(app);
                     ClassLoader cl = app.getClassLoader();
-                    if (canLoadTargetClasses(cl)) {
+                    if (LayoutSettings.hasBaseline() && canLoadTargetClasses(cl)) {
                         installAll(xposed, cl);
                     }
                 }
@@ -93,8 +96,9 @@ public final class MainHook extends XposedModule {
             xposed.hook(actOnCreate).intercept(chain -> {
                 Activity activity = (Activity) chain.getThisObject();
                 if (activity != null) {
+                    LayoutSettings.initialize(activity);
                     ClassLoader cl = activity.getClassLoader();
-                    if (canLoadTargetClasses(cl)) {
+                    if (LayoutSettings.hasBaseline() && canLoadTargetClasses(cl)) {
                         installAll(xposed, cl);
                     }
                 }
@@ -123,6 +127,22 @@ public final class MainHook extends XposedModule {
             log("PopupBlocker installed successfully.");
         } catch (Throwable t) {
             log("PopupBlocker install error: " + t);
+        }
+
+        if (targetMainProcess) {
+            HostSettingsEntry.install(xposed, classLoader);
+            MatchPlacementGuard.install(xposed, classLoader);
+
+            try {
+                ExtraMarketingPopupBlocker.install(xposed, classLoader);
+            } catch (Throwable t) {
+                log("ExtraMarketingPopupBlocker install error: " + t);
+            }
+            HomeFreeOrderPopupBlocker.install(xposed, classLoader);
+            WithdrawFollowPopup.install(xposed, classLoader);
+            FoodDetectiveAutoJump.install(xposed, classLoader);
+            FoodDetectiveWebExit.install(xposed, classLoader);
+            PlaceOrderAdPurifier.install(xposed, classLoader);
         }
 
         try {

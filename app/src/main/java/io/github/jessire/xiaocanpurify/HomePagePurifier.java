@@ -1,8 +1,13 @@
 package io.github.jessire.xiaocanpurify;
 
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.*;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
+
 import android.app.Activity;
 import android.graphics.Color;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
@@ -17,10 +22,48 @@ import io.github.libxposed.api.XposedInterface;
 public final class HomePagePurifier {
     private HomePagePurifier() {}
 
+    private static boolean liveViews;
+    private static volatile boolean liveSearchBanner;
+
+    // AdBlocker installs first; its legacy interceptor can consult this at callback time.
+    static boolean ownsLiveSearchBanner() { return liveSearchBanner; }
+
+    // Called only after the new rules have been published. The listener can run on either thread.
+    static void onLiveSettingsChanged() {
+        if (!LayoutSettings.isVerifiedHost3212()) return;
+        if (!HomeLiveViews.mainThread()) {
+            new Handler(Looper.getMainLooper()).post(HomePagePurifier::onLiveSettingsChanged);
+            return;
+        }
+        HomeLiveViews.refresh();
+        if (liveViews) HomeLiveLayoutWatch.invalidateLayouts();
+        HomeLiveSearchHint.refresh();
+        HomeLiveSearchBanner.refresh();
+    }
+
+    private static void registerLiveListener() {
+        try {
+            // Optional while compiling against the pre-live settings baseline.
+            LayoutSettings.class.getDeclaredMethod("addLiveListener", Runnable.class)
+                    .invoke(null, (Runnable) HomePagePurifier::onLiveSettingsChanged);
+        } catch (NoSuchMethodException ignored) {
+            // The baseline has only process-start settings; no save callback required.
+        } catch (ReflectiveOperationException e) {
+            MainHook.log("Home live listener unavailable: " + e);
+        }
+    }
+
     public static void install(XposedInterface xposed, ClassLoader classLoader) {
+        boolean verified = LayoutSettings.isVerifiedHost3212();
+        liveViews = verified && HomeLiveViews.install(xposed);
+        boolean liveHint = verified && HomeLiveSearchHint.install(xposed, classLoader);
+        if (liveViews || liveHint) registerLiveListener();
         hookStatusBarAndWindow(xposed, classLoader);
-        hookSearchHint(xposed, classLoader);
-        hookSearchRightBanner(xposed, classLoader);
+        hookSearchHint(xposed, classLoader, liveHint);
+        liveSearchBanner = liveViews && HomeLiveSearchBanner.install(xposed, classLoader);
+        if (!liveSearchBanner) {
+            hookSearchRightBanner(xposed, classLoader);
+        }
         hookTopBanner(xposed, classLoader);
         hookFeedBanners(xposed, classLoader);
         hookOrderBanner(xposed, classLoader);
@@ -30,6 +73,27 @@ public final class HomePagePurifier {
         hookMenusRow(xposed, classLoader);
         hookHomeBottomInit(xposed, classLoader);
         hookHideHeadAdapter(xposed, classLoader);
+        hookPlacementPicRepository(xposed, classLoader);
+    }
+
+    private static void hookPlacementPicRepository(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> repoClass = Class.forName("com.realtech.promotion.repository.PlacementPicRepository", false, cl);
+            for (Method m : repoClass.getDeclaredMethods()) {
+                if ("fetch".equals(m.getName()) && m.getParameterCount() == 5 && m.getReturnType() == Object.class) {
+                    xposed.hook(m).intercept(chain -> {
+                        if (LayoutSettings.isVerifiedHost3212() && enabled(HOME_FEED)) {
+                            return Collections.emptyList();
+                        }
+                        return chain.proceed();
+                    });
+                    MainHook.log("Hooked PlacementPicRepository.fetch -> skip ad pic requests");
+                    break;
+                }
+            }
+        } catch (Throwable t) {
+            MainHook.log("PlacementPicRepository hook unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     private static void hookRefreshLayout(XposedInterface xposed, ClassLoader cl) {
@@ -37,7 +101,7 @@ public final class HomePagePurifier {
             Class<?> vm = Class.forName("com.realtech.promotion.pages.home.viewmodel.HomeViewModel", false, cl);
             Method eligible = vm.getDeclaredMethod("canUseHomeSecondFloor");
             // The host then installs its normal MaterialHeader and keeps its refresh listener.
-            xposed.hook(eligible).intercept(chain -> false);
+            xposed.hook(eligible).intercept(chain -> enabled(HOME_SECOND) ? false : chain.proceed());
             MainHook.log("Home second floor disabled; ordinary refresh preserved");
         } catch (Throwable t) {
             MainHook.log("Failed to hook home second-floor eligibility: " + t);
@@ -53,6 +117,7 @@ public final class HomePagePurifier {
             for (Method m : mainActivityClass.getDeclaredMethods()) {
                 if ("onCreate".equals(m.getName()) || "onResume".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_THEME)) return chain.proceed();
                         Object result = chain.proceed();
                         Activity activity = (Activity) chain.getThisObject();
                         if (activity != null && activity.getWindow() != null) {
@@ -79,6 +144,7 @@ public final class HomePagePurifier {
             for (Method m : fragClass.getDeclaredMethods()) {
                 if ("applyStatusBarThemeColor".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_THEME)) return chain.proceed();
                         Object binding = chain.getArg(0);
                         if (binding != null) {
                             try {
@@ -104,7 +170,7 @@ public final class HomePagePurifier {
             for (Method m : barLayoutClass.getDeclaredMethods()) {
                 String mName = m.getName();
                 if ("setSpringFestivalState".equals(mName) || "set5stState".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_THEME) ? null : chain.proceed());
                     MainHook.log("Hooked HomeAppBarLayoutView." + mName + " -> blocked festive bg");
                 }
             }
@@ -114,12 +180,18 @@ public final class HomePagePurifier {
     /**
      * Eradicate marketing/ad hint words from the search box and reset placeholder to standard.
      */
-    private static void hookSearchHint(XposedInterface xposed, ClassLoader cl) {
+    private static void hookSearchHint(XposedInterface xposed, ClassLoader cl, boolean liveHint) {
+        if (!liveHint) hookLegacySearchHint(xposed, cl);
+        hookSearchHintRefresh(xposed, cl);
+    }
+
+    private static void hookLegacySearchHint(XposedInterface xposed, ClassLoader cl) {
         try {
             Class<?> autoScrollClass = Class.forName("com.realtech.promotion.widget.AutoScrollTextView", false, cl);
             for (Method m : autoScrollClass.getDeclaredMethods()) {
                 if ("setTextList".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_SEARCH_HINT)) return chain.proceed();
                         Object autoScroll = chain.getThisObject();
                         if (autoScroll != null) {
                             try {
@@ -142,12 +214,14 @@ public final class HomePagePurifier {
         } catch (Throwable t) {
             MainHook.log("Failed to hook AutoScrollTextView: " + t);
         }
+    }
 
+    private static void hookSearchHintRefresh(XposedInterface xposed, ClassLoader cl) {
         try {
             Class<?> vmClass = Class.forName("com.realtech.promotion.pages.home.viewmodel.HomeViewModel", false, cl);
             for (Method m : vmClass.getDeclaredMethods()) {
                 if ("refreshSearchWord".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_SEARCH_HINT) ? null : chain.proceed());
                     MainHook.log("Hooked HomeViewModel.refreshSearchWord");
                     break;
                 }
@@ -167,6 +241,7 @@ public final class HomePagePurifier {
                 String mName = m.getName();
                 if ("renderSearchRightBanner".equals(mName) || "updateSearchRightImgList".equals(mName)) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_SEARCH_BANNER)) return chain.proceed();
                         Object barLayout = chain.getThisObject();
                         if (barLayout != null) {
                             try {
@@ -201,6 +276,7 @@ public final class HomePagePurifier {
             for (Method m : barLayoutClass.getDeclaredMethods()) {
                 if (!"updateTitleView".equals(m.getName()) && !"updateTitleBar".equals(m.getName())) continue;
                 xposed.hook(m).intercept(chain -> {
+                    if (!enabled(HOME_SEARCH_BANNER)) return chain.proceed();
                     Object result = chain.proceed();
                     try {
                         Field f = barLayoutClass.getDeclaredField("binding");
@@ -236,6 +312,7 @@ public final class HomePagePurifier {
                         || "applyTrafficExpBImmersiveBannerLayout".equals(mName)
                         || "initBanner".equals(mName)) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_TOP)) return chain.proceed();
                         List<Object> args = chain.getArgs();
                         for (Object arg : args) {
                             if (arg != null) {
@@ -246,7 +323,7 @@ public final class HomePagePurifier {
                                     try {
                                         Field sbField = arg.getClass().getField("statusBar");
                                         View sb = (View) sbField.get(arg);
-                                        if (sb != null) sb.setBackgroundColor(Color.WHITE);
+                                        if (sb != null && enabled(HOME_THEME)) sb.setBackgroundColor(Color.WHITE);
                                     } catch (Throwable ignored) {}
                                 }
                             }
@@ -265,6 +342,7 @@ public final class HomePagePurifier {
             for (Method m : headViewExtClass.getDeclaredMethods()) {
                 if ("updateHeadBannerView".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_TOP)) return chain.proceed();
                         List<Object> args = chain.getArgs();
                         for (Object arg : args) {
                             if (arg != null) {
@@ -275,7 +353,7 @@ public final class HomePagePurifier {
                                     try {
                                         Field sbField = arg.getClass().getField("statusBar");
                                         View sb = (View) sbField.get(arg);
-                                        if (sb != null) sb.setBackgroundColor(Color.WHITE);
+                                        if (sb != null && enabled(HOME_THEME)) sb.setBackgroundColor(Color.WHITE);
                                     } catch (Throwable ignored) {}
                                 }
                             }
@@ -334,11 +412,13 @@ public final class HomePagePurifier {
      * Block HomeBottomKt.initHomeBottomView from setting bottom placement visible
      */
     private static void hookHomeBottomInit(XposedInterface xposed, ClassLoader cl) {
+        // Bottom init includes location/login listeners. Never skip or replay those for hot UI.
+        if (liveViews) return;
         try {
             Class<?> bottomKtClass = Class.forName("com.realtech.promotion.pages.home.ext.HomeBottomKt", false, cl);
             for (Method m : bottomKtClass.getDeclaredMethods()) {
                 if ("initHomeBottomView".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_BOTTOM) ? null : chain.proceed());
                     MainHook.log("Hooked HomeBottomKt.initHomeBottomView -> blocked");
                     break;
                 }
@@ -357,6 +437,12 @@ public final class HomePagePurifier {
             for (Method m : menusBindingClass.getDeclaredMethods()) {
                 if ("bind".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (liveViews) {
+                            Object result = chain.proceed();
+                            HomeLiveViews.track(asView(result), () -> enabled(HOME_MENUS), true, false);
+                            return result;
+                        }
+                        if (!enabled(HOME_MENUS)) return chain.proceed();
                         Object result = chain.proceed();
                         if (result != null) {
                             try {
@@ -394,11 +480,30 @@ public final class HomePagePurifier {
                 if (!"bindAll".equals(m.getName())) continue;
                 xposed.hook(m).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (!chain.getArgs().isEmpty()) collapseHeader(asView(chain.getArg(0)));
+                    if (!chain.getArgs().isEmpty()) {
+                        Object binding = chain.getArg(0);
+                        if (liveViews) {
+                            trackHeader(binding);
+                        } else if (collapseWholeHeader()) {
+                            collapseHeader(asView(binding));
+                        }
+                    }
                     return result;
                 });
             }
         } catch (Throwable t) { MainHook.log("Header hook: " + t); }
+    }
+
+    // The legacy parent collapse also hides independent controls inside the header.
+    static boolean collapseWholeHeader() {
+        return enabled(HOME_TOP) && enabled(HOME_MENUS) && enabled(HOME_ORDER)
+                && enabled(HOME_SEARCH_BANNER) && enabled(HOME_SEARCH_HINT);
+    }
+
+    private static void trackHeader(Object binding) {
+        HomeLiveViews.track(asView(binding), HomePagePurifier::collapseWholeHeader, true, true);
+        HomeLiveViews.track(asView(field(binding, "menus")), () -> enabled(HOME_MENUS), true, false);
+        HomeLiveViews.track(asView(field(binding, "layoutTrafficExpCOrderBanner")), HOME_ORDER);
     }
 
     private static void collapseHeader(View root) {
@@ -434,6 +539,7 @@ public final class HomePagePurifier {
                 boolean bulk = "submitList".equals(name) || "setItems".equals(name) || "addAll".equals(name);
                 if (!bulk && !"add".equals(name) && !"set".equals(name)) continue;
                 xposed.hook(m).intercept(chain -> {
+                    if (!enabled(HOME_FEED)) return chain.proceed();
                     if (!type.isInstance(chain.getThisObject())) return chain.proceed();
                     Object[] args = chain.getArgs().toArray();
                     if (bulk) {
@@ -490,16 +596,21 @@ public final class HomePagePurifier {
      * Eradicate "开心收下" order banner bar from home header.
      */
     private static void hookOrderBanner(XposedInterface xposed, ClassLoader cl) {
+        if (liveViews) {
+            hookLiveOrderBanner(xposed, cl);
+            return;
+        }
         try {
             Class<?> extClass = Class.forName("com.realtech.promotion.pages.home.ext.HomeTrafficExpCOrderExtKt", false, cl);
 
             for (Method m : extClass.getDeclaredMethods()) {
                 String mName = m.getName();
                 if ("buildTrafficExpCOrderBannerItems".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> Collections.emptyList());
+                    xposed.hook(m).intercept(chain -> enabled(HOME_ORDER) ? Collections.emptyList() : chain.proceed());
                     MainHook.log("Hooked HomeTrafficExpCOrderExtKt.buildTrafficExpCOrderBannerItems");
                 } else if ("updateTrafficExpCOrderBanner".equals(mName)) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_ORDER)) return chain.proceed();
                         List<Object> args = chain.getArgs();
                         for (Object arg : args) {
                             if (arg != null && arg.getClass().getName().contains("ViewHeadHomeBinding")) {
@@ -518,13 +629,26 @@ public final class HomePagePurifier {
                     });
                     MainHook.log("Hooked HomeTrafficExpCOrderExtKt.updateTrafficExpCOrderBanner");
                 } else if ("bindTrafficExpCOrderBanner".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_ORDER) ? null : chain.proceed());
                     MainHook.log("Hooked HomeTrafficExpCOrderExtKt.bindTrafficExpCOrderBanner");
                 }
             }
         } catch (Throwable t) {
             MainHook.log("Failed to hook HomeTrafficExpCOrderExtKt: " + t);
         }
+    }
+
+    private static void hookLiveOrderBanner(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> type = Class.forName("com.realtech.promotion.pages.home.ext.HomeTrafficExpCOrderExtKt", false, cl);
+            for (Method m : type.getDeclaredMethods()) {
+                if (!"updateTrafficExpCOrderBanner".equals(m.getName()) || m.getParameterCount() != 3) continue;
+                xposed.hook(m).intercept(chain -> {
+                    HomeLiveViews.track(asView(field(chain.getArg(1), "layoutTrafficExpCOrderBanner")), HOME_ORDER);
+                    return chain.proceed();
+                });
+            }
+        } catch (Throwable t) { MainHook.log("Home live order banner hook: " + t); }
     }
 
     /**
@@ -537,6 +661,12 @@ public final class HomePagePurifier {
             for (Method m : bottomPlacementBindingClass.getDeclaredMethods()) {
                 if ("bind".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (liveViews) {
+                            Object result = chain.proceed();
+                            HomeLiveViews.track(asView(result), HOME_BOTTOM);
+                            return result;
+                        }
+                        if (!enabled(HOME_BOTTOM)) return chain.proceed();
                         MainHook.log("LayoutHomeBottomPlacementBinding.bind INVOKED");
                         Object result = chain.proceed();
                         if (result != null) {
@@ -566,6 +696,12 @@ public final class HomePagePurifier {
             for (Method m : bottomBindingClass.getDeclaredMethods()) {
                 if ("bind".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (liveViews) {
+                            Object result = chain.proceed();
+                            trackBottom(result);
+                            return result;
+                        }
+                        if (!enabled(HOME_BOTTOM)) return chain.proceed();
                         Object result = chain.proceed();
                         if (result != null) {
                             try {
@@ -594,9 +730,12 @@ public final class HomePagePurifier {
         }
     }
 
-    /**
-     * Eradicate floating red packet rain and all floating bubbles on home.
-     */
+    private static void trackBottom(Object binding) {
+        HomeLiveViews.track(asView(field(binding, "layoutBottomPlacement")), HOME_BOTTOM);
+        HomeLiveViews.track(asView(field(binding, "bottomTips")), HOME_BOTTOM);
+    }
+
+    /** Eradicate floating red packet rain and other floating entries on home. */
     private static void hookFloatingRedPacket(XposedInterface xposed, ClassLoader cl) {
         // 1. Hook LayoutHomeFabBinding.bind -> collapse layout_fab immediately
         try {
@@ -604,6 +743,12 @@ public final class HomePagePurifier {
             for (Method m : fabBindingClass.getDeclaredMethods()) {
                 if ("bind".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (liveViews) {
+                            Object result = chain.proceed();
+                            HomeLiveViews.track(asView(result), HOME_FAB);
+                            return result;
+                        }
+                        if (!enabled(HOME_FAB)) return chain.proceed();
                         Object result = chain.proceed();
                         if (result != null) {
                             try {
@@ -622,15 +767,34 @@ public final class HomePagePurifier {
             MainHook.log("Failed to hook LayoutHomeFabBinding.bind: " + t);
         }
 
+        // These legacy gates suppress first-time observers and widget state. With reversible
+        // masks the host initializes and updates them once, at its original call sites.
+        if (liveViews) hookLiveRainTip(xposed, cl);
+        else hookLegacyFabGates(xposed, cl);
+
+        hookHomeLayoutGuard(xposed, cl);
+    }
+
+    private static void hookLiveRainTip(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> rain = Class.forName("com.realtech.promotion.widget.home.HomeRedPackRainFabView", false, cl);
+            Method tip = rain.getDeclaredMethod("showTipView");
+            // Do not consume the once-a-day hint while its parent is hidden.
+            xposed.hook(tip).intercept(chain -> enabled(HOME_FAB) ? null : chain.proceed());
+        } catch (Throwable t) { MainHook.log("Home live rain tip hook: " + t); }
+    }
+
+    private static void hookLegacyFabGates(XposedInterface xposed, ClassLoader cl) {
         // 2. Hook HomeRedPackRainFabView
         try {
             Class<?> rainClass = Class.forName("com.realtech.promotion.widget.home.HomeRedPackRainFabView", false, cl);
             for (Method m : rainClass.getDeclaredMethods()) {
                 if ("checkShowRain".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> false);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_FAB) ? false : chain.proceed());
                     MainHook.log("Hooked HomeRedPackRainFabView.checkShowRain -> false");
                 } else if ("updateViews".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_FAB)) return chain.proceed();
                         View view = (View) chain.getThisObject();
                         collapseView(view);
                         return null;
@@ -648,6 +812,7 @@ public final class HomePagePurifier {
             for (Method m : fabKtClass.getDeclaredMethods()) {
                 if ("initHomeFab".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_FAB)) return chain.proceed();
                         Object binding = chain.getArg(0);
                         if (binding != null) {
                             try {
@@ -671,7 +836,7 @@ public final class HomePagePurifier {
             for (Method m : fabOrderKtClass.getDeclaredMethods()) {
                 String mName = m.getName();
                 if ("initFabOrder".equals(mName) || "updateOrderFabView".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_FAB) ? null : chain.proceed());
                     MainHook.log("Hooked HomeFabOrderKt." + mName);
                 }
             }
@@ -689,6 +854,7 @@ public final class HomePagePurifier {
                         || "initNewUserFabView".equals(mName)
                         || "updateNewUserFabView".equals(mName)) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(HOME_FAB)) return chain.proceed();
                         List<Object> args = chain.getArgs();
                         if (!args.isEmpty() && args.get(0) != null) {
                             hideHomeLayoutFab(args.get(0));
@@ -707,7 +873,7 @@ public final class HomePagePurifier {
             Class<?> adapterClass = Class.forName("com.realtech.promotion.adapters.HomeFabOrderBannerAdapter", false, cl);
             for (Method m : adapterClass.getDeclaredMethods()) {
                 if ("onBindView".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> null);
+                    xposed.hook(m).intercept(chain -> enabled(HOME_FAB) ? null : chain.proceed());
                     MainHook.log("Hooked HomeFabOrderBannerAdapter.onBindView");
                     break;
                 }
@@ -715,8 +881,10 @@ public final class HomePagePurifier {
         } catch (Throwable t) {
             MainHook.log("Failed to hook HomeFabOrderBannerAdapter: " + t);
         }
+    }
 
-        // 6. Hook HomeFragment lazyInitView (called when fragment becomes visible)
+    private static void hookHomeLayoutGuard(XposedInterface xposed, ClassLoader cl) {
+        // Hook HomeFragment lazyInitView (called when fragment becomes visible)
         try {
             Class<?> fragClass = Class.forName("com.realtech.promotion.pages.home.HomeFragment", false, cl);
             for (Method m : fragClass.getDeclaredMethods()) {
@@ -747,19 +915,28 @@ public final class HomePagePurifier {
             if (root == null) return;
             enforceHome(binding);
             if (watchedHomes.put(root, Boolean.TRUE) == null) {
-                root.getViewTreeObserver().addOnGlobalLayoutListener(() -> enforceHome(binding));
+                if (liveViews) HomeLiveLayoutWatch.attach(root, binding, HomePagePurifier::enforceHome);
+                else root.getViewTreeObserver().addOnGlobalLayoutListener(() -> enforceHome(binding));
                 MainHook.log("Home persistent layout guard attached");
             }
         } catch (Throwable t) { MainHook.log("Home guard: " + t); }
     }
 
     private static void enforceHome(Object binding) {
-        for (String name : new String[]{"layoutFab", "flSceondFloor", "lySceondFloorGuide", "layoutSecondHeader"})
-            collapseView(asView(field(binding, name)));
-        collapseView(asView(field(field(binding, "layoutBottom"), "layoutBottomPlacement")));
+        if (liveViews) {
+            HomeLiveViews.track(asView(field(binding, "layoutFab")), HOME_FAB);
+            trackBottom(field(binding, "layoutBottom"));
+        } else if (enabled(HOME_FAB)) collapseView(asView(field(binding, "layoutFab")));
+        if (enabled(HOME_SECOND)) {
+            for (String name : new String[]{"flSceondFloor", "lySceondFloorGuide", "layoutSecondHeader"})
+                collapseView(asView(field(binding, name)));
+        }
+        if (!liveViews && enabled(HOME_BOTTOM)) collapseView(asView(field(field(binding, "layoutBottom"), "layoutBottomPlacement")));
         View rv = asView(field(binding, "rv"));
         View toolbar = asView(field(binding, "toolBar"));
-        if (rv != null && toolbar != null && toolbar.getHeight() > 0) {
+        trackToolbarHint(toolbar);
+        if (liveViews && !collapseWholeHeader()) HomeLiveViews.restorePadding(rv);
+        if (collapseWholeHeader() && rv != null && toolbar != null && toolbar.getHeight() > 0) {
             // The title bar is taller than the search pill, and that spare band is transparent,
             // so the gray page background shows through. Pin the list to the pill itself.
             View search = findViewByName(toolbar, "search_view");
@@ -780,11 +957,22 @@ public final class HomePagePurifier {
                     if (gap > 1) top = Math.max(0, rv.getPaddingTop() - gap);
                 }
             }
-            if (rv.getPaddingTop() != top) rv.setPadding(rv.getPaddingLeft(), top, rv.getPaddingRight(), rv.getPaddingBottom());
-            if (rv instanceof ViewGroup) ((ViewGroup) rv).setClipToPadding(true);
+            if (liveViews) HomeLiveViews.pinPadding(rv, top);
+            else {
+                if (rv.getPaddingTop() != top) rv.setPadding(rv.getPaddingLeft(), top, rv.getPaddingRight(), rv.getPaddingBottom());
+                if (rv instanceof ViewGroup) ((ViewGroup) rv).setClipToPadding(true);
+            }
         }
         View root = asView(binding);
         if (root instanceof ViewGroup) cleanHomeTree((ViewGroup) root);
+    }
+
+    private static void trackToolbarHint(View toolbar) {
+        if (toolbar == null || !LayoutSettings.isVerifiedHost3212()) return;
+        try {
+            Object search = toolbar.getClass().getMethod("getSearchBinding").invoke(toolbar);
+            HomeLiveSearchHint.track(field(search, "tvAuto"));
+        } catch (ReflectiveOperationException | RuntimeException ignored) {}
     }
 
     private static View topmostContent(View rv) {
@@ -821,13 +1009,31 @@ public final class HomePagePurifier {
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
             String id = getViewIdName(child);
-            if ("fl_banner".equals(id)) {
-                // Header root owns the promotional blocks, not the merchant filter adapter.
-                if (child.getParent() instanceof View) collapseHeader((View) child.getParent());
+            if ("fl_banner".equals(id) && enabled(HOME_TOP)) {
+                if (liveViews) {
+                    if (child.getParent() instanceof View) {
+                        HomeLiveViews.track((View) child.getParent(), HomePagePurifier::collapseWholeHeader, true, true);
+                    }
+                    collapseView(child);
+                } else if (collapseWholeHeader() && child.getParent() instanceof View) {
+                    collapseHeader((View) child.getParent());
+                } else {
+                    collapseView(child);
+                }
             }
-            if ("layout_traffic_exp_c_order_banner".equals(id) || "layout_bottom_placement".equals(id)
-                    || "layout_fab".equals(id) || "fl_sceond_floor".equals(id)
-                    || "ly_sceond_floor_guide".equals(id) || "layout_second_header".equals(id)) collapseView(child);
+            if (liveViews) {
+                if ("layout_traffic_exp_c_order_banner".equals(id)) HomeLiveViews.track(child, HOME_ORDER);
+                if ("layout_bottom_placement".equals(id)) HomeLiveViews.track(child, HOME_BOTTOM);
+                if ("layout_fab".equals(id)) HomeLiveViews.track(child, HOME_FAB);
+            } else if ((enabled(HOME_ORDER) && "layout_traffic_exp_c_order_banner".equals(id))
+                    || (enabled(HOME_BOTTOM) && "layout_bottom_placement".equals(id))
+                    || (enabled(HOME_FAB) && "layout_fab".equals(id))) {
+                collapseView(child);
+            }
+            if (enabled(HOME_SECOND) && ("fl_sceond_floor".equals(id)
+                    || "ly_sceond_floor_guide".equals(id) || "layout_second_header".equals(id))) {
+                collapseView(child);
+            }
             if (child instanceof ViewGroup) cleanHomeTree((ViewGroup) child);
         }
     }

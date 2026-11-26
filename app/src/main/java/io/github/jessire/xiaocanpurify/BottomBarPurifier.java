@@ -1,5 +1,9 @@
 package io.github.jessire.xiaocanpurify;
 
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.MAIN_FLOAT;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_EXTRA;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
+
 import android.app.Activity;
 import android.os.Bundle;
 import android.view.View;
@@ -50,6 +54,7 @@ public final class BottomBarPurifier {
             for (Method m : mainActivityClass.getDeclaredMethods()) {
                 if ("getTabActionList".equals(m.getName()) || "tabActionList_delegate$lambda$0".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(NAV_EXTRA)) return chain.proceed();
                         List<Object> threeTabs = new ArrayList<>(3);
                         threeTabs.add(fHome);
                         threeTabs.add(fOrder);
@@ -74,11 +79,12 @@ public final class BottomBarPurifier {
                 String mName = m.getName();
                 if ("getSecondTabPlacementContent".equals(mName) || "getSecondTabPlacementMatchValue".equals(mName)) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(NAV_EXTRA)) return chain.proceed();
                         MainHook.log("Intercepted " + mName + ", returning null to keep pure Order tab");
                         return null;
                     });
                 } else if ("isSecondTabPlacementAction".equals(mName)) {
-                    xposed.hook(m).intercept(chain -> false);
+                    xposed.hook(m).intercept(chain -> enabled(NAV_EXTRA) ? false : chain.proceed());
                 }
             }
             MainHook.log("Hooked second tab placement overrides");
@@ -129,10 +135,21 @@ public final class BottomBarPurifier {
     }
 
     private static void purgeExtraTabs(Activity activity) {
+        if (!enabled(NAV_EXTRA) && !enabled(MAIN_FLOAT)) return;
         try {
             Method getBinding = activity.getClass().getMethod("getBinding");
             Object binding = getBinding.invoke(activity);
             if (binding == null) return;
+
+            if (enabled(MAIN_FLOAT)) {
+                // Hide floating red packet icon on main activity
+                try {
+                    Field ivFloatingWindowField = binding.getClass().getField("ivFloatingWindow");
+                    View v = (View) ivFloatingWindowField.get(binding);
+                    if (v != null) v.setVisibility(View.GONE);
+                } catch (Throwable ignored) {}
+            }
+            if (!enabled(NAV_EXTRA)) return;
 
             Field navViewField = binding.getClass().getField("navView");
             ViewGroup navView = (ViewGroup) navViewField.get(binding);
@@ -156,13 +173,6 @@ public final class BottomBarPurifier {
             try {
                 Field tvVipExpire = binding.getClass().getField("tvVipExpireTag");
                 View v = (View) tvVipExpire.get(binding);
-                if (v != null) v.setVisibility(View.GONE);
-            } catch (Throwable ignored) {}
-
-            // Hide floating red packet icon on main activity
-            try {
-                Field ivFloatingWindowField = binding.getClass().getField("ivFloatingWindow");
-                View v = (View) ivFloatingWindowField.get(binding);
                 if (v != null) v.setVisibility(View.GONE);
             } catch (Throwable ignored) {}
 
@@ -202,6 +212,7 @@ public final class BottomBarPurifier {
             for (Method m : listenerClass.getDeclaredMethods()) {
                 if ("onItemSelected".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(NAV_EXTRA)) return chain.proceed();
                         int currentPos = (int) chain.getArg(2);
                         Field this$0Field = listenerClass.getDeclaredField("this$0");
                         this$0Field.setAccessible(true);
@@ -292,6 +303,7 @@ public final class BottomBarPurifier {
             for (Method m : mainActivityClass.getDeclaredMethods()) {
                 if ("changeTabIndex".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
+                        if (!enabled(NAV_EXTRA)) return chain.proceed();
                         int index = (int) chain.getArg(0);
                         if (index == 4) {
                             MainHook.log("Mapped changeTabIndex from 4 to 2");

@@ -6,6 +6,13 @@ import java.util.Map;
 import io.github.libxposed.api.XposedInterface;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
+import com.realtech.common.entity.AppLocationEntity;
+import com.realtech.location.LocationManager;
+import com.realtech.location.utils.LocationUtils;
+import com.realtech.promotion.pages.home.viewmodel.HomeVMFeedsKt;
+import com.realtech.promotion.pages.home.viewmodel.HomeViewModel;
+import kotlin.coroutines.Continuation;
+import kotlin.jvm.functions.Function0;
 
 public final class RegressionTests {
     public static final class Refresh {
@@ -19,12 +26,12 @@ public final class RegressionTests {
         public final Refresh refresh = new Refresh();
     }
 
-    private static final Map<Method, XposedInterface.Hooker> hooks = new HashMap<>();
+    private static final Map<java.lang.reflect.Executable, XposedInterface.Hooker> hooks = new HashMap<>();
     private static final ClassLoader loader = RegressionTests.class.getClassLoader();
     private static final XposedInterface xposed = (XposedInterface) Proxy.newProxyInstance(loader,
             new Class<?>[]{XposedInterface.class}, (p, m, a) -> {
                 if (!m.getName().equals("hook")) return null;
-                Method target = (Method) a[0];
+                var target = (java.lang.reflect.Executable) a[0];
                 return Proxy.newProxyInstance(loader, new Class<?>[]{XposedInterface.HookBuilder.class},
                         (bp, bm, ba) -> {
                             if (bm.getName().equals("intercept")) {
@@ -52,6 +59,14 @@ public final class RegressionTests {
     }
 
     private static Object call(Method target, Object receiver, boolean expectedProceed, Object... args) throws Throwable {
+        return callWithOriginal(target, receiver, expectedProceed, () -> null, args);
+    }
+
+    @FunctionalInterface
+    private interface Original { Object run() throws Throwable; }
+
+    private static Object callWithOriginal(java.lang.reflect.Executable target, Object receiver, boolean expectedProceed,
+                                           Original original, Object... args) throws Throwable {
         XposedInterface.Hooker hook = hooks.get(target);
         if (hook == null) throw new AssertionError("Missing hook: " + target);
         boolean[] proceeded = {false};
@@ -62,13 +77,69 @@ public final class RegressionTests {
                         case "getExecutable": return target;
                         case "getArg": return args[(Integer) a[0]];
                         case "getArgs": return java.util.Arrays.asList(args);
-                        case "proceed": proceeded[0] = true; return null;
+                        case "proceed": proceeded[0] = true; return original.run();
                         default: throw new AssertionError(m.getName());
                     }
                 });
         Object result = hook.intercept(chain);
         if (proceeded[0] != expectedProceed) throw new AssertionError("Unexpected original execution: " + target);
         return result;
+    }
+
+    private static Object[] vmArgs(boolean force, Continuation cont) {
+        return new Object[]{force, true, cont};
+    }
+
+    private static void homeFreeOrderPopup() throws Throwable {
+        var owner = com.realtech.promotion.pages.home.viewmodel.HomeVMOrderKt.class;
+        var homeVm = com.realtech.promotion.pages.home.viewmodel.HomeViewModel.class;
+        Method target = owner.getDeclaredMethod("checkFreeOrderDialog", homeVm);
+        var before = new HashMap<>(hooks);
+        install("HomeFreeOrderPopupBlocker", "install");
+        var added = new HashMap<>(hooks);
+        added.keySet().removeAll(before.keySet());
+        if (!added.keySet().equals(java.util.Set.of(target)))
+            throw new AssertionError("Only the exact popup producer should be hooked: " + added.keySet());
+
+        Class<?> settings = Class.forName("io.github.jessire.xiaocanpurify.LayoutSettings");
+        var active = settings.getDeclaredField("active");
+        var verified = settings.getDeclaredField("verifiedHost3212");
+        active.setAccessible(true);
+        verified.setAccessible(true);
+        Object previousActive = active.get(null);
+        Object previousVerified = verified.get(null);
+        try {
+            @SuppressWarnings("unchecked")
+            Class<? extends Enum> items = (Class<? extends Enum>) Class.forName(settings.getName() + "$Item");
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            var enabled = java.util.EnumSet.allOf((Class) items);
+            Object toggle = enabled.stream().filter(item -> item.toString().equals("HOME_FREE_ORDER_POPUP"))
+                    .findFirst().orElseThrow();
+            var category = items.getDeclaredField("category");
+            var key = items.getDeclaredField("key");
+            category.setAccessible(true);
+            key.setAccessible(true);
+            if (!"HOME".equals(category.get(toggle).toString()) || !"home_free_order_popup".equals(key.get(toggle)))
+                throw new AssertionError("Missing independent homepage registry entry");
+
+            var vm = new com.realtech.promotion.pages.home.viewmodel.HomeViewModel();
+            active.set(null, null);
+            call(target, null, true, vm); // settings not loaded: fail open
+            active.set(null, enabled);
+            verified.setBoolean(null, false);
+            call(target, null, true, vm); // unverified host
+            verified.setBoolean(null, true);
+            call(target, null, false, vm);
+            var disabled = enabled.clone();
+            disabled.remove(toggle);
+            active.set(null, disabled);
+            call(target, null, true, vm); // only this switch off
+        } finally {
+            active.set(null, previousActive);
+            verified.set(null, previousVerified);
+            hooks.clear();
+            hooks.putAll(before);
+        }
     }
 
     private static void refresh() throws Throwable {
@@ -190,9 +261,174 @@ public final class RegressionTests {
         call(bridge, null, true, new MethodCall("postService", Map.of("service", "GetClientWithdrawList")), new Reply());
     }
 
+    private static void foodDetective() throws Throwable {
+        var enabled = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Class<?> guard = Class.forName("io.github.jessire.xiaocanpurify.FoodDetectiveAutoJump");
+        Method install = guard.getDeclaredMethod("install", XposedInterface.class, ClassLoader.class,
+                java.util.function.BooleanSupplier.class, java.util.function.BooleanSupplier.class);
+        install.setAccessible(true);
+        install.invoke(null, xposed, loader, (java.util.function.BooleanSupplier) enabled::get,
+                (java.util.function.BooleanSupplier) () -> false);
+        Class<?> nav = com.therouter.router.Navigator.class;
+        Method route = nav.getDeclaredMethod("navigation$default", nav, android.content.Context.class,
+                com.therouter.router.interceptor.NavigationCallback.class, int.class, Object.class);
+        var detail = new com.realtech.promotion.pages.detail.PromotionDetailActivity();
+        String target = "https://example.invalid/task?x=1&from_source=3&t=1740000000000";
+        detail.onDestroy(foodRoute(route, "/web", target, 3, false));
+        if (detail.exitWork != 2 || detail.dailyWrite != 1) throw new AssertionError("Skipped host exit work/check");
+        detail.openManually(foodRoute(route, "/web", target, 3, true));
+        detail.foodDetectiveCheck(foodRoute(route, "/web", target, 3, true));
+        detail.onDestroy(foodRoute(route, "/web", "https://example.invalid/voucher", 3, true));
+        detail.onDestroy(foodRoute(route, "/other", target, 3, true));
+        detail.onDestroy(foodRoute(route, "/web", target, 1, true));
+        detail.onDestroy(foodRoute(route, "/web", target + "x", 3, true));
+        enabled.set(false);
+        detail.onDestroy(foodRoute(route, "/web", target, 3, true));
+        Class<?> rule = Class.forName("io.github.jessire.xiaocanpurify.FoodDetectiveJumpRule");
+        Method exit = rule.getDeclaredMethod("isDetailExit", StackTraceElement[].class);
+        exit.setAccessible(true);
+        String detailPkg = "com.realtech.promotion.pages.detail.";
+        for (String owner : List.of("dp.DpPromotionDetailActivity", "mt.MtPromotionDetailActivity",
+                "quick.QuickPromotionDetailBottomSheet", "dp.DpQuickPromotionDetailBottomSheet",
+                "mt.quick.MtQuickPromotionDetailBottomSheet")) {
+            String name = detailPkg + owner;
+            StackTraceElement check = new StackTraceElement(name, "foodDetectiveCheck", null, -1);
+            String method = owner.equals("mt.MtPromotionDetailActivity") ? "onPause" : "onDestroy";
+            if (owner.endsWith("BottomSheet")) {
+                StackTraceElement observer = new StackTraceElement(name + "$createObserver$1", method, null, -1);
+                StackTraceElement accessor = new StackTraceElement(name, "access$foodDetectiveCheck", null, -1);
+                assertExit(exit, true, check, accessor, observer);
+                assertExit(exit, true, check, observer);
+            } else {
+                assertExit(exit, true, check, new StackTraceElement(name, method, null, -1));
+            }
+            assertExit(exit, false, check, new StackTraceElement(name, "manual", null, -1));
+            assertExit(exit, false, new StackTraceElement("com.realtech.Other", "route", null, -1), check,
+                    new StackTraceElement(name, method, null, -1));
+        }
+    }
+
+    private static Runnable foodRoute(Method route, String path, String link, int mask, boolean proceed) {
+        return () -> {
+            try {
+                call(route, null, proceed, new com.therouter.router.Navigator(path, link), null, null, mask, null);
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+        };
+    }
+
+    private static void assertExit(Method exit, boolean expected, StackTraceElement... frames) throws Exception {
+        if (!Boolean.valueOf(expected).equals(exit.invoke(null, (Object) frames)))
+            throw new AssertionError("Unexpected caller decision: " + java.util.Arrays.toString(frames));
+    }
+
+    private static void foodWebExit() throws Throwable {
+        var hookClass = Class.forName("io.github.jessire.xiaocanpurify.FoodDetectiveWebExit");
+        var method = hookClass.getDeclaredMethod("install", XposedInterface.class, ClassLoader.class,
+                java.util.function.BooleanSupplier.class);
+        method.setAccessible(true);
+        var enabled = new java.util.concurrent.atomic.AtomicBoolean(true);
+        method.invoke(null, xposed, loader, (java.util.function.BooleanSupplier) enabled::get);
+        var page = new com.realtech.webpage.web.AgentWebFragment();
+        var controller = new com.realtech.webpage.web.WebControllerImpl(page);
+        var fragmentHook = page.getClass().getMethod("callJsRetention");
+        var controllerHook = controller.getClass().getMethod("callJsRetention");
+        String task = "https://gw.hzaiguojiang.com/static/act/singleActivity.html#/new-recommend";
+        page.web.url = task + "?hide_title_bar=true&from=app&from_source=3&t=1";
+        page.history = true;
+        page.onBackClick(() -> { throw new AssertionError("History must take precedence"); });
+        if (page.historyMoves != 1 || page.activity.finishes != 0) throw new AssertionError("History changed");
+        page.history = false;
+        page.canJsBack = true;
+        page.onBackClick(() -> { throw new AssertionError("Direct host close must take precedence"); });
+        if (page.activity.finishes != 1) throw new AssertionError("Direct close changed");
+        page.canJsBack = false;
+        page.activity.finishes = 0;
+        page.otherCaller(retentionCall(fragmentHook, page, true));
+        enabled.set(false);
+        page.onBackClick(retentionCall(fragmentHook, page, true));
+        enabled.set(true);
+        for (String other : new String[]{null, "about:blank", "https://gw.hzaiguojiang.com/error",
+                task + "-other?hide_title_bar=true", task.replace("https:", "http:"),
+                task.replace(".com/", ".com.evil/"), task.replace(".com/", ".com@other.example/"),
+                task.replace(".com/", ".com:444/"), task.replace("/static/act/", "/different/"),
+                task.replace("/new-recommend", "/task-another")}) {
+            page.web.url = other;
+            page.onBackClick(retentionCall(fragmentHook, page, true));
+            controller.closeWebView(retentionCall(controllerHook, controller, true));
+        }
+        page.web.url = task; // Manual entry URL: not an automatic navigation, but the same retention branch.
+        page.activity = new android.app.Activity();
+        page.onBackClick(retentionCall(fragmentHook, page, true));
+        page.activity = new com.realtech.webpage.web.CommonWebActivity();
+        page.activity.destroyed = true;
+        page.onBackClick(retentionCall(fragmentHook, page, true));
+        page.activity.destroyed = false;
+        controller.agent = new Object();
+        controller.closeWebView(retentionCall(controllerHook, controller, true));
+        controller.agent = page.agent;
+        if (page.activity.finishes != 0) throw new AssertionError("Forwarded cases closed activity");
+        controller.closeWebView(retentionCall(controllerHook, controller, false));
+        if (page.activity.finishes != 1) throw new AssertionError("Bridge close did not finish exactly once");
+        page.activity.finishes = 0;
+        controller.hostWeakRef.clear();
+        controller.closeWebView(retentionCall(controllerHook, controller, true));
+        page.onBackClick(retentionCall(fragmentHook, page, false));
+        if (page.activity.finishes != 1) throw new AssertionError("Back did not finish exactly once");
+        page.onBackClick(retentionCall(fragmentHook, page, true));
+        if (page.activity.finishes != 1) throw new AssertionError("Already finishing closed twice");
+    }
+
+    private static Runnable retentionCall(Method hook, Object receiver, boolean proceed) {
+        return () -> {
+            try { call(hook, receiver, proceed); }
+            catch (Throwable t) { throw new AssertionError(t); }
+        };
+    }
+
+    private static void foodTaskPage() throws Throwable {
+        var pageEnabled = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var autoEnabled = new java.util.concurrent.atomic.AtomicBoolean(false);
+        var guard = Class.forName("io.github.jessire.xiaocanpurify.FoodDetectiveAutoJump");
+        var install = guard.getDeclaredMethod("install", XposedInterface.class, ClassLoader.class,
+                java.util.function.BooleanSupplier.class, java.util.function.BooleanSupplier.class);
+        install.setAccessible(true);
+        install.invoke(null, xposed, loader, (java.util.function.BooleanSupplier) autoEnabled::get,
+                (java.util.function.BooleanSupplier) pageEnabled::get);
+        var nav = com.therouter.router.Navigator.class;
+        var route = nav.getDeclaredMethod("navigation$default", nav, android.content.Context.class,
+                com.therouter.router.interceptor.NavigationCallback.class, int.class, Object.class);
+        String target = "https://gw.hzaiguojiang.com/static/act/singleActivity.html#/new-recommend";
+        String link = target + "?hide_title_bar=true&from=app";
+        var detail = new com.realtech.promotion.pages.detail.PromotionDetailActivity();
+        // Host's verified manual URL; the new switch does not depend on caller or source.
+        detail.openManually(foodRoute(route, "/web", link + "&from_source=1&t=1", 3, false));
+        foodRoute(route, "/web", link + "&from_source=2&t=2", 3, false).run();
+        detail.onDestroy(foodRoute(route, "/web", link + "&from_source=3&t=3", 3, false));
+        foodRoute(route, "/web", target, 3, false).run();
+        if (detail.exitWork != 2 || detail.dailyWrite != 1) throw new AssertionError("Host exit work was skipped");
+        for (String other : new String[]{null, "about:blank", "参数错误", "/order_voucher_submit_success",
+                target.replace("https:", "http:"), target.replace(".com/", ".com.evil/"),
+                target.replace(".com/", ".com@evil.example/"), target.replace(".com/", ".com:444/"),
+                target.replace("/static/act/", "/elsewhere/"), target + "-other?from_source=2",
+                target.replace("/new-recommend", "/task-other"), target.replace("#", "?"),
+                "https://example.invalid/?next=" + target, target + "?broken=%zz"}) {
+            foodRoute(route, "/web", other, 3, true).run();
+        }
+        foodRoute(route, "/order_voucher_submit_success", link, 3, true).run();
+        foodRoute(route, "/web", link, 1, true).run();
+        call(route, null, true, new com.therouter.router.Navigator("/web", link), null, null, 3, new Object());
+        pageEnabled.set(false);
+        autoEnabled.set(true);
+        detail.openManually(foodRoute(route, "/web", link + "&from_source=1&t=1", 3, true));
+        foodRoute(route, "/web", link + "&from_source=2&t=2", 3, true).run();
+        detail.onDestroy(foodRoute(route, "/web", link + "&from_source=3&t=3", 3, false));
+    }
+
     public static void main(String[] args) throws Throwable {
         int failures = 0;
-        for (String test : args.length == 0 ? new String[]{"refresh", "ads", "popup", "policies", "withdraw", "vip", "detail", "enrollment", "taobaoPrompt"} : args) {
+        for (String test : args.length == 0 ? new String[]{"refresh", "ads", "popup", "homeFreeOrderPopup", "policies", "withdraw", "vip", "detail", "enrollment", "taobaoPrompt", "foodDetective", "foodWebExit", "foodTaskPage"} : args) {
             try {
                 RegressionTests.class.getDeclaredMethod(test).invoke(null);
                 System.out.println("PASS: " + test);
