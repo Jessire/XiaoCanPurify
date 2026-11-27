@@ -27,7 +27,44 @@ public final class PopupBlocker {
         hookSpecificDialogClasses(xposed, classLoader);
         hookKuiklyDialogQueue(xposed, classLoader);
         hookTaobaoInstallPrompt(xposed, classLoader);
+        hookNotificationRequest(xposed, classLoader);
+        hookRebateExitRetention(xposed, classLoader);
         EnrollmentJumpGuard.install(xposed, classLoader);
+    }
+
+    private static void hookRebateExitRetention(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> page = Class.forName("com.realtech.promotion.meituanrebate.MeituanRebateToolFragment", false, cl);
+            Method show = page.getDeclaredMethod("showExitRetention");
+            Method getActivity = page.getMethod("getActivity");
+            xposed.hook(show).intercept(chain -> {
+                Object activity = getActivity.invoke(chain.getThisObject());
+                if (!(activity instanceof Activity)) return chain.proceed();
+                // The host already finishes directly once the retention prompt has been shown.
+                ((Activity) activity).finish();
+                return null;
+            });
+            MainHook.log("Hooked Meituan rebate exit promotion");
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+        } catch (Throwable t) {
+            MainHook.log("Rebate exit hook unavailable: " + t.getClass().getSimpleName());
+        }
+    }
+
+    /** Homepage "open notifications" nag added in 3.23.0. */
+    private static void hookNotificationRequest(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> home = Class.forName("com.realtech.promotion.pages.home.HomeFragment", false, cl);
+            Method show = home.getDeclaredMethod("showNotificationRequestDialog");
+            xposed.hook(show).intercept(chain -> {
+                MainHook.log("Blocked HomeFragment.showNotificationRequestDialog");
+                return null;
+            });
+            MainHook.log("Hooked HomeFragment.showNotificationRequestDialog");
+        } catch (NoSuchMethodException | ClassNotFoundException ignored) {
+        } catch (Throwable t) {
+            MainHook.log("Notification request hook unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     private static void hookTaobaoInstallPrompt(XposedInterface xposed, ClassLoader cl) {
@@ -238,6 +275,7 @@ public final class PopupBlocker {
         String t = tag.toLowerCase(Locale.ROOT);
         return t.contains("maintomin")
                 || t.startsWith("home_up_")
+                || t.startsWith("vip-home-upgrade-")
                 || t.contains("openschoolshare")
                 || t.contains("past_board_permission")
                 || t.contains("timeerror")

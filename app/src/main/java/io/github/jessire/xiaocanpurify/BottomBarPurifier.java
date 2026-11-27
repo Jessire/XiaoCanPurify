@@ -2,6 +2,7 @@ package io.github.jessire.xiaocanpurify;
 
 import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.MAIN_FLOAT;
 import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_EXTRA;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_HIDE_ORDER;
 import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
 
 import android.app.Activity;
@@ -9,6 +10,7 @@ import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -26,6 +28,21 @@ public final class BottomBarPurifier {
         hookChangeTabIndex(xposed, classLoader);
         hookApplyBottomTabTheme(xposed, classLoader);
         hookSecondTabPlacement(xposed, classLoader);
+        hookShoppingRebateTab(xposed, classLoader);
+    }
+
+    /** 3.23.0 swaps tab 1 for a "购物返利" page through a remote feature switch. */
+    private static void hookShoppingRebateTab(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> registry = Class.forName("com.realtech.xiaocan.MainTabDynamicRegistryKt", false, cl);
+            Method enabledMethod = registry.getDeclaredMethod("isShoppingRebateTabEnabled");
+            xposed.hook(enabledMethod).intercept(chain -> enabled(NAV_EXTRA) ? Boolean.FALSE : chain.proceed());
+            MainHook.log("Hooked isShoppingRebateTabEnabled -> keep Order tab");
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+            // Not present before 3.23.0.
+        } catch (Throwable t) {
+            MainHook.log("Shopping rebate tab hook unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -135,11 +152,15 @@ public final class BottomBarPurifier {
     }
 
     private static void purgeExtraTabs(Activity activity) {
-        if (!enabled(NAV_EXTRA) && !enabled(MAIN_FLOAT)) return;
+        if (!enabled(NAV_EXTRA) && !enabled(MAIN_FLOAT) && !LayoutSettings.isVerifiedHost3212()) return;
         try {
             Method getBinding = activity.getClass().getMethod("getBinding");
             Object binding = getBinding.invoke(activity);
             if (binding == null) return;
+            if (LayoutSettings.isVerifiedHost3212()) {
+                View secondTab = (View) binding.getClass().getField("nbiTd").get(binding);
+                trackOrderTab(activity, secondTab);
+            }
 
             if (enabled(MAIN_FLOAT)) {
                 // Hide floating red packet icon on main activity
@@ -199,6 +220,29 @@ public final class BottomBarPurifier {
             MainHook.log("Failed to purge extra tabs: " + t);
         }
     }
+
+    private static void trackOrderTab(Activity activity, View secondTab) {
+        // GONE frees layout space without removing the tab from the host's position table.
+        WeakReference<Activity> owner = new WeakReference<>(activity);
+        HomeLiveViews.track(secondTab, () -> enabled(NAV_HIDE_ORDER) && isOrderTab(owner.get()),
+                false, false);
+    }
+
+    private static boolean isOrderTab(Activity activity) {
+        if (activity == null) return false;
+        if (enabled(NAV_EXTRA)) return true;
+        try {
+            Field pager = activity.getClass().getDeclaredField("tabPagerAdapter");
+            pager.setAccessible(true);
+            Object adapter = pager.get(activity);
+            if (adapter == null) return false;
+            Object tab = adapter.getClass().getMethod("getTab", int.class).invoke(adapter, 1);
+            return tab != null && "com.realtech.xiaocan.MainTabAction$ORDER".equals(tab.getClass().getName());
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return false;
+        }
+    }
+
 
     /**
      * Hook MainActivity$setUpPages$2.onItemSelected to handle tab clicks cleanly:

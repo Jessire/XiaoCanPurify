@@ -209,13 +209,12 @@ public final class RegressionTests {
         var vm = new com.realtech.promotion.pages.detail.PromotionDetailViewModel();
         call(vm.getClass().getMethod("submitOrder", boolean.class, boolean.class), vm, true, false, true);
         var launch = new com.realtech.common.ui.util.LaunchUrlUtils();
-        Object outcome = call(launch.getClass().getMethod("openUrl", String.class, String.class, boolean.class, String.class, Object.class),
-                launch, false, "imeituan://www.meituan.com/", "confirm", true, "store", new Object());
+        Method openUrl = launch.getClass().getMethod("openUrl", String.class, String.class,
+                boolean.class, String.class, Continuation.class);
+        Object outcome = call(openUrl, launch, false, "imeituan://www.meituan.com/", "confirm", true, "store", null);
         if (!Boolean.FALSE.equals(outcome)) throw new AssertionError("Auto launch must settle as not opened");
-        call(launch.getClass().getMethod("openUrl", String.class, String.class, boolean.class, String.class, Object.class),
-                launch, true, "alipays://platformapi/startapp", "payment", true, "pay", new Object());
-        call(launch.getClass().getMethod("openUrl", String.class, String.class, boolean.class, String.class, Object.class),
-                launch, true, "https://example.com/login", "login", true, "auth", new Object());
+        call(openUrl, launch, true, "alipays://platformapi/startapp", "payment", true, "pay", null);
+        call(openUrl, launch, true, "https://example.com/login", "login", true, "auth", null);
     }
 
     private static void vip() throws Throwable {
@@ -426,9 +425,47 @@ public final class RegressionTests {
         detail.onDestroy(foodRoute(route, "/web", link + "&from_source=3&t=3", 3, false));
     }
 
+    private static void benefitWebJump() throws Throwable {
+        install("BenefitWebJumpGuard", "install");
+        var launch = new com.realtech.common.ui.util.LaunchUrlUtils();
+        Method url = launch.getClass().getMethod("openUrl", String.class, String.class,
+                boolean.class, String.class, Continuation.class);
+        Method mini = launch.getClass().getMethod("openMini", String.class, String.class,
+                String.class, boolean.class, String.class, Continuation.class);
+        String prompt = "跳转领取大额福利";
+        var web = new com.realtech.webpage.web.CommonWebActivity();
+        com.blankj.utilcode.util.ActivityUtils.top = web;
+        try {
+            if (call(url, launch, false, "test://ad", prompt, true, null, null) != Boolean.FALSE
+                    || call(mini, launch, false, "ad", "/promo", prompt, true, null, null) != Boolean.FALSE) {
+                throw new AssertionError("Marketing jump must report cancellation");
+            }
+            for (String other : new String[]{null, "是否允许打开微信？", "提现到账确认", prompt + "？"}) {
+                call(url, launch, true, "test://normal", other, true, null, null);
+                call(mini, launch, true, "normal", "/normal", other, true, null, null);
+            }
+            com.blankj.utilcode.util.ActivityUtils.top = new android.app.Activity();
+            call(url, launch, true, "test://ad", prompt, true, null, null);
+            call(mini, launch, true, "ad", "/promo", prompt, true, null, null);
+            com.blankj.utilcode.util.ActivityUtils.top = null;
+            call(url, launch, true, "test://ad", prompt, true, null, null);
+            var wechat = new com.realtech.common.ui.mp.WeChatFuncs();
+            Method dialog = wechat.getClass().getMethod("showLaunchMiniAppDialog",
+                    android.content.Context.class, String.class, Continuation.class);
+            if (!Integer.valueOf(0).equals(call(dialog, wechat, false, web, prompt, null))) {
+                throw new AssertionError("WeChat prompt must report close without launch");
+            }
+            call(dialog, wechat, true, web, "提现到账确认", null);
+            call(dialog, wechat, true, new android.app.Activity(), prompt, null);
+            call(dialog, wechat, true, null, prompt, null);
+        } finally {
+            com.blankj.utilcode.util.ActivityUtils.top = null;
+        }
+    }
+
     public static void main(String[] args) throws Throwable {
         int failures = 0;
-        for (String test : args.length == 0 ? new String[]{"refresh", "ads", "popup", "homeFreeOrderPopup", "policies", "withdraw", "vip", "detail", "enrollment", "taobaoPrompt", "foodDetective", "foodWebExit", "foodTaskPage"} : args) {
+        for (String test : args.length == 0 ? new String[]{"refresh", "ads", "popup", "homeFreeOrderPopup", "policies", "withdraw", "vip", "detail", "enrollment", "taobaoPrompt", "foodDetective", "foodWebExit", "foodTaskPage", "benefitWebJump"} : args) {
             try {
                 RegressionTests.class.getDeclaredMethod(test).invoke(null);
                 System.out.println("PASS: " + test);

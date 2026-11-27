@@ -39,7 +39,8 @@ final class DetailPagePurifier {
         String[] bindings = {"LayoutPromotionDetailContentBinding", "LayoutMtPromotionDetailContentBinding",
                 "LayoutElmPromotionDetailContentBinding", "LayoutDpPromotionDetailContentBinding",
                 "DialogQuickPromotionDetailBinding", "DialogMtQuickPromotionDetailBinding",
-                "DialogElmQuickPromotionDetailBinding", "DialogDpQuickPromotionDetailBinding"};
+                "DialogElmQuickPromotionDetailBinding", "DialogDpQuickPromotionDetailBinding",
+                "LayoutPromotionDetailBottomBinding", "LayoutDpPromotionDetailBottomBinding"};
         for (String name : bindings) {
             try {
                 Class<?> binding = Class.forName("com.realtech.promotion.databinding." + name, false, cl);
@@ -61,6 +62,9 @@ final class DetailPagePurifier {
         View share = OrderLiveViews.asView(OrderLiveViews.getField(binding, "ivShare"));
         OrderLiveViews.track(share, () -> enabled(DETAIL_SHARE), OrderLiveViews.Size.NONE);
         OrderLiveViews.watchLayout(share);
+        View couponBubble = OrderLiveViews.asView(OrderLiveViews.getField(binding, "ivBubble"));
+        OrderLiveViews.track(couponBubble, () -> enabled(DETAIL_AD), OrderLiveViews.Size.NONE);
+        OrderLiveViews.watchLayout(couponBubble);
     }
 
     private static void trackAd(View view) {

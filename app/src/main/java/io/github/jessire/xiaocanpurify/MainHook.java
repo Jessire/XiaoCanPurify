@@ -132,6 +132,7 @@ public final class MainHook extends XposedModule {
         if (targetMainProcess) {
             HostSettingsEntry.install(xposed, classLoader);
             MatchPlacementGuard.install(xposed, classLoader);
+            BenefitWebJumpGuard.install(xposed, classLoader);
 
             try {
                 ExtraMarketingPopupBlocker.install(xposed, classLoader);

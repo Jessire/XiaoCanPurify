@@ -28,8 +28,7 @@ final class HomeLiveSearchHint {
         try {
             Class<?> type = Class.forName("com.realtech.promotion.widget.AutoScrollTextView", false, cl);
             Class<?> word = Class.forName("com.realtech.data.placement.content.PlacementSearchWord", false, cl);
-            placeholder = Collections.singletonList(word.getConstructor(String.class, String.class)
-                    .newInstance("搜索商家或套餐", "#999999"));
+            placeholder = Collections.singletonList(placeholderWord(word, cl));
             animating = declared(type, "isAnimating");
             current = declared(type, "currentTextView");
             next = declared(type, "nextTextView");
@@ -50,6 +49,19 @@ final class HomeLiveSearchHint {
             MainHook.log("Home search hint live hook unavailable: " + t);
             setter = null;
             return false;
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Object placeholderWord(Class<?> word, ClassLoader cl) throws ReflectiveOperationException {
+        try {
+            return word.getConstructor(String.class, String.class).newInstance("搜索商家或套餐", "#999999");
+        } catch (NoSuchMethodException e) {
+            // 3.23.0: (word, color, tag, storeId, SearchWordType)
+            Class<? extends Enum> type = (Class<? extends Enum>) Class.forName(
+                    "com.realtech.data.placement.content.SearchWordType", false, cl);
+            return word.getConstructor(String.class, String.class, String.class, Long.class, type)
+                    .newInstance("搜索商家或套餐", "#999999", null, null, Enum.valueOf(type, "OTHER"));
         }
     }
 

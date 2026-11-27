@@ -16,7 +16,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -144,7 +143,6 @@ final class SettingsUi {
             Context ctx = getContext();
             LinearLayout root = vertical(ctx);
             root.setBackgroundColor(colors.bg);
-            disableForceDark(root);
 
             // ---- Top bar: back, title, overflow ----
             LinearLayout bar = horizontal(ctx);
@@ -213,7 +211,7 @@ final class SettingsUi {
             countLabels.addView(suffix, suffixParams);
             countRow.addView(countLabels, new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
-            heroOn = pill(ctx, "全开", colors.ink, Color.WHITE);
+            heroOn = pill(ctx, "全开", colors.primaryFill, colors.primaryText);
             heroOn.setOnClickListener(v -> applyAll(true));
             heroOff = pill(ctx, "全关", colors.surfaceMuted, colors.subtext);
             heroOff.setOnClickListener(v -> applyAll(false));
@@ -250,7 +248,7 @@ final class SettingsUi {
 
             // ---- Floating restart capsule ----
             capsule = horizontal(ctx);
-            capsule.setBackground(surface(ctx, colors.ink, colors.ink, 26));
+            capsule.setBackground(surface(ctx, colors.capsuleFill, colors.capsuleBorder, 26));
             capsule.setElevation(dp(ctx, 8));
             pad(capsule, 18, 8, 8, 8);
             capsule.setVisibility(GONE);
@@ -263,11 +261,12 @@ final class SettingsUi {
             capsuleText.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             capsule.addView(capsuleText, new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f));
 
-            TextView restartButton = pill(ctx, "立即重启", Color.WHITE, colors.ink);
+            TextView restartButton = pill(ctx, "立即重启", colors.restartFill, colors.restartText);
             restartButton.setOnClickListener(v -> restart(host));
             capsule.addView(restartButton, new LinearLayout.LayoutParams(dp(ctx, 88), dp(ctx, 36)));
 
             FrameLayout overlay = new FrameLayout(ctx);
+            disableForceDark(overlay);
             overlay.addView(root, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
             FrameLayout.LayoutParams capsuleParams = new FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
             capsuleParams.gravity = Gravity.BOTTOM;
@@ -456,11 +455,17 @@ final class SettingsUi {
         }
 
         private void applyAll(boolean enabled) {
+            applyAll(enabled, false);
+        }
+
+        private void applyAll(boolean enabled, boolean restoreDefaults) {
             if (applying) return;
             applying = true;
             try {
                 EnumMap<Item, Boolean> latest = LayoutSettings.read(host);
-                for (Item item : Item.values()) latest.put(item, enabled);
+                for (Item item : Item.values()) {
+                    latest.put(item, restoreDefaults ? LayoutSettings.defaultEnabled(item) : enabled);
+                }
                 if (LayoutSettings.save(host, latest)) {
                     values.clear();
                     values.putAll(latest);
@@ -501,7 +506,7 @@ final class SettingsUi {
             menu.getMenu().add(0, 3, 2, "关于小蚕净化");
             menu.setOnMenuItemClickListener(item -> {
                 switch (item.getItemId()) {
-                    case 1 -> applyAll(true);
+                    case 1 -> applyAll(true, true);
                     case 2 -> applyAll(false);
                     case 3 -> showAbout();
                     default -> { }
@@ -519,7 +524,7 @@ final class SettingsUi {
                 long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
                 version = "适配小蚕 " + info.versionName + "（" + code + "）";
             } catch (PackageManager.NameNotFoundException | RuntimeException e) {
-                version = "适配小蚕 3.21.2（2985）";
+                version = "适配小蚕 3.21.2（2985）、3.23.0（3070）";
             }
             int hot = 0;
             for (Item item : Item.values()) if (LayoutSettings.hotCapable(item)) hot++;
@@ -635,16 +640,21 @@ final class SettingsUi {
                     path.lineTo(cx + r, cy);
                 }
                 case RESTART -> {
-                    float cx = w / 2f, cy = h / 2f, r = unit * 0.62f;
-                    RectF oval = new RectF(cx - r, cy - r, cx + r, cy + r);
-                    path.addArc(oval, -215f, 265f);
+                    // Rotate-cw in a centered 24-unit viewport.
+                    float scale = Math.min(w, h) / 24f;
+                    if (scale <= 0f) return;
+                    canvas.save();
+                    canvas.translate((w - 24f * scale) / 2f, (h - 24f * scale) / 2f);
+                    canvas.scale(scale, scale);
+                    paint.setStrokeWidth(2.25f);
+                    path.moveTo(21f, 7f);
+                    path.arcTo(3f, 2f, 21f, 20f, -45f, -315f, false);
+                    path.moveTo(21f, 2f);
+                    path.lineTo(21f, 7f);
+                    path.lineTo(16f, 7f);
                     canvas.drawPath(path, paint);
-                    path.reset();
-                    float ax = cx + r * (float) Math.cos(Math.toRadians(-215));
-                    float ay = cy - r * (float) Math.sin(Math.toRadians(-215));
-                    path.moveTo(ax - unit * 0.28f, ay - unit * 0.06f);
-                    path.lineTo(ax, ay);
-                    path.lineTo(ax + unit * 0.06f, ay - unit * 0.30f);
+                    canvas.restore();
+                    return;
                 }
                 default -> {
                     paint.setStyle(Paint.Style.FILL);
@@ -782,12 +792,18 @@ final class SettingsUi {
         final boolean dark;
         final int bg, card, surfaceMuted, border, hairline;
         final int text, subtext, muted;
-        final int ink, jade, jadeDark, trackOff;
-        final int ripple, capsuleText, capsuleIcon;
+        final int jade, jadeDark, trackOff, ripple;
+        final int primaryFill, primaryText;
+        final int capsuleFill, capsuleBorder, capsuleText, capsuleIcon;
+        final int restartFill, restartText;
 
         Palette(Context ctx) {
-            dark = (ctx.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                    == Configuration.UI_MODE_NIGHT_YES;
+            this((ctx.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                    == Configuration.UI_MODE_NIGHT_YES);
+        }
+
+        Palette(boolean dark) {
+            this.dark = dark;
             if (dark) {
                 bg = 0xFF121311;
                 card = 0xFF1C1E1B;
@@ -795,15 +811,20 @@ final class SettingsUi {
                 border = 0xFF2C2F2A;
                 hairline = 0xFF252823;
                 text = 0xFFF2F3EF;
-                subtext = 0xFFA0A49C;
-                muted = 0xFF777B74;
-                ink = 0xFFF2F3EF;
+                subtext = 0xFFBDC2BA;
+                muted = 0xFFA3A99F;
+                primaryFill = 0xFF67DAB9;
+                primaryText = 0xFF12231C;
                 jade = 0xFF2BC49B;
                 jadeDark = 0xFF4FD6B0;
                 trackOff = 0xFF3A3D38;
                 ripple = 0x30FFFFFF;
-                capsuleText = 0xFF121311;
-                capsuleIcon = 0xFF2BC49B;
+                capsuleFill = 0xFF24312B;
+                capsuleBorder = 0xFF435B50;
+                capsuleText = 0xFFF2F6F1;
+                capsuleIcon = 0xFF67DAB9;
+                restartFill = primaryFill;
+                restartText = primaryText;
             } else {
                 bg = 0xFFF6F6F4;
                 card = 0xFFFFFFFF;
@@ -811,15 +832,20 @@ final class SettingsUi {
                 border = 0xFFE6E6E1;
                 hairline = 0xFFF0F0EC;
                 text = 0xFF15171C;
-                subtext = 0xFF73777F;
-                muted = 0xFF9A9EA6;
-                ink = 0xFF15171C;
+                subtext = 0xFF5C6169;
+                muted = 0xFF646972;
+                primaryFill = 0xFF15171C;
+                primaryText = 0xFFFFFFFF;
                 jade = 0xFF0E9F7E;
                 jadeDark = 0xFF097A60;
                 trackOff = 0xFFD5D6D2;
                 ripple = 0x18000000;
+                capsuleFill = primaryFill;
+                capsuleBorder = capsuleFill;
                 capsuleText = 0xFFFFFFFF;
                 capsuleIcon = 0xFF34D399;
+                restartFill = primaryText;
+                restartText = primaryFill;
             }
         }
     }

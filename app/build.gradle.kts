@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.jessire.xiaocanpurify"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "2.0"
+        versionCode = 27
+        versionName = "2.1"
     }
 
     buildTypes {

@@ -67,6 +67,7 @@ final class SettingsGroups {
                 case WITHDRAW_FOLLOW:
                     return PROFILE;
                 case NAV_EXTRA:
+                case NAV_HIDE_ORDER:
                 case MAIN_FLOAT:
                     return GLOBAL;
                 default:
@@ -87,10 +88,10 @@ final class SettingsGroups {
 
     enum Group {
         NAV(Section.MAIN, "底栏与主界面推广", "精简底栏，隐藏主界面浮层",
-                Item.NAV_EXTRA, Item.MAIN_FLOAT),
+                Item.NAV_EXTRA, Item.NAV_HIDE_ORDER, Item.MAIN_FLOAT),
         HOME_PROMOTIONS(Section.MAIN, "首页推广", "搜索营销、横幅、红包与启动免单",
                 Item.HOME_SEARCH_HINT, Item.HOME_SEARCH_BANNER, Item.HOME_TOP, Item.HOME_MENUS,
-                Item.HOME_FEED, Item.HOME_ORDER, Item.HOME_FAB, Item.HOME_BOTTOM,
+                Item.HOME_FEED, Item.HOME_BRAND_COUPON, Item.HOME_ORDER, Item.HOME_FAB, Item.HOME_BOTTOM,
                 Item.HOME_FREE_ORDER_POPUP),
         HOME_INTERACTION(Section.MAIN, "首页主题与交互", "去节日主题，禁第二层，保留刷新",
                 Item.HOME_THEME, Item.HOME_SECOND),

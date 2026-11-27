@@ -15,7 +15,7 @@ import java.util.function.BooleanSupplier;
 
 import io.github.libxposed.api.XposedInterface;
 
-/** Removes only the native ad row from the 3.21.2 order voucher screen. */
+/** Removes only the native ad row from the verified hosts' order voucher screen. */
 final class PlaceOrderAdPurifier {
     private static final String PACKAGE = "com.realtech.xiaocan";
     private static final String ACTIVITY = "com.realtech.place.order.ui.PlaceOrderActivity";
@@ -41,7 +41,7 @@ final class PlaceOrderAdPurifier {
                 return;
             }
             xposed.hook(target).intercept(chain -> enabled.getAsBoolean() ? intercept(chain, adItem) : chain.proceed());
-            MainHook.log("Hooked PlaceOrderActivity.createLayout for native voucher ad (3.21.2 only)");
+            MainHook.log("Hooked PlaceOrderActivity.createLayout for native voucher ad (verified hosts only)");
         } catch (Exception | LinkageError e) {
             MainHook.log("Native voucher ad hook unavailable: " + e.getClass().getSimpleName());
         }
@@ -111,7 +111,7 @@ final class PlaceOrderAdPurifier {
             if (!PACKAGE.equals(activity.getPackageName())) return false;
             PackageInfo info = activity.getPackageManager().getPackageInfo(PACKAGE, 0);
             long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
-            return code == 2985 && "3.21.2".equals(info.versionName);
+            return HostVersions.isSupported(info.versionName, code);
         } catch (Exception | LinkageError e) {
             return false;
         }

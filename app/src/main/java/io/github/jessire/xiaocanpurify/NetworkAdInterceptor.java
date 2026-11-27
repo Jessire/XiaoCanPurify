@@ -191,7 +191,12 @@ public final class NetworkAdInterceptor {
                 }
 
                 Method proceedMethod = chain.getClass().getMethod("proceed", request.getClass());
-                return proceedMethod.invoke(chain, request);
+                try {
+                    return proceedMethod.invoke(chain, request);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    // Rethrow the real IOException; a wrapped checked exception crashes the dispatcher.
+                    throw e.getCause() != null ? e.getCause() : e;
+                }
             }
             if ("equals".equals(method.getName())) {
                 return proxy == (args != null && args.length > 0 ? args[0] : null);

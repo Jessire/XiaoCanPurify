@@ -24,6 +24,7 @@ final class HostSettingsEntry {
     private HostSettingsEntry() {}
 
     static void install(XposedInterface xposed, ClassLoader loader) {
+        hookLynxSettingsRoute(xposed, loader);
         try {
             Class<?> host = Class.forName(ACTIVITY, false, loader);
             Class<?> flutter = Class.forName("io.flutter.embedding.android.FlutterActivity", false, loader);
@@ -108,7 +109,22 @@ final class HostSettingsEntry {
                 }
                 return original;
             });
-            MainHook.log("Hooked Flutter settings content (3.21.2 only)");
+            MainHook.log("Hooked Flutter settings content (verified hosts only)");
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            logFailure(e);
+        }
+    }
+
+    // 3.23.0 can open settings as a Lynx page; keep the Flutter page that carries the module row.
+    private static void hookLynxSettingsRoute(XposedInterface xposed, ClassLoader loader) {
+        try {
+            Class<?> navigator = Class.forName("com.realtech.common.router.LynxSettingsNavigator", false, loader);
+            Method open = navigator.getDeclaredMethod("open", boolean.class);
+            xposed.hook(open).intercept(chain -> Boolean.TRUE.equals(chain.getArg(0))
+                    ? chain.proceed(new Object[]{Boolean.FALSE}) : chain.proceed());
+            MainHook.log("Hooked LynxSettingsNavigator.open -> Flutter settings");
+        } catch (ClassNotFoundException ignored) {
+            // Older hosts only have the Flutter settings route.
         } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
             logFailure(e);
         }
@@ -130,7 +146,7 @@ final class HostSettingsEntry {
         if (!MainHook.TARGET_PACKAGE.equals(activity.getPackageName())) return false;
         PackageInfo info = activity.getPackageManager().getPackageInfo(MainHook.TARGET_PACKAGE, 0);
         long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
-        return code == 2985 && "3.21.2".equals(info.versionName);
+        return HostVersions.isSupported(info.versionName, code);
     }
 
     private static FlutterSettingsRow findContent(Activity activity) {

@@ -4,12 +4,16 @@ import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.*;
 import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
 
 import android.app.Activity;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Canvas;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.lang.reflect.Field;
@@ -38,7 +42,6 @@ public final class HomePagePurifier {
         HomeLiveViews.refresh();
         if (liveViews) HomeLiveLayoutWatch.invalidateLayouts();
         HomeLiveSearchHint.refresh();
-        HomeLiveSearchBanner.refresh();
     }
 
     private static void registerLiveListener() {
@@ -59,7 +62,12 @@ public final class HomePagePurifier {
         boolean liveHint = verified && HomeLiveSearchHint.install(xposed, classLoader);
         if (liveViews || liveHint) registerLiveListener();
         hookStatusBarAndWindow(xposed, classLoader);
+        if (verified) hookHomeWindowColor(xposed, classLoader);
         hookSearchHint(xposed, classLoader, liveHint);
+        if (verified) {
+            hookCleanHeader(xposed, classLoader);
+            hookHomeListSurface(xposed, classLoader);
+        }
         liveSearchBanner = liveViews && HomeLiveSearchBanner.install(xposed, classLoader);
         if (!liveSearchBanner) {
             hookSearchRightBanner(xposed, classLoader);
@@ -108,8 +116,112 @@ public final class HomePagePurifier {
         }
     }
 
+    private static final int HOME_SURFACE = 0xFFFFF2E5;
+    private static final int CLEAN_HEADER_TEXT = 0xFF333333;
+    private static final int CLEAN_HEADER_BRAND = 0xFFB74400;
+
+    private static void hookCleanHeader(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> bar = Class.forName("com.realtech.promotion.widget.HomeAppBarLayoutView", false, cl);
+            Method[] titleCallbacks = {bar.getDeclaredMethod("updateTitleBar", float.class),
+                    bar.getDeclaredMethod("updateTitleView")};
+            Field binding = bar.getDeclaredField("binding");
+            binding.setAccessible(true);
+            for (Method method : titleCallbacks) {
+                xposed.hook(method).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (enabled(HOME_TOP)) {
+                        View toolbar = (View) chain.getThisObject();
+                        paintHomeSurface(toolbar);
+                        Object views = binding.get(toolbar);
+                        Object address = field(views, "tvAddress");
+                        if (address instanceof TextView) ((TextView) address).setTextColor(CLEAN_HEADER_TEXT);
+                        tintHeaderIcon(field(views, "ivXiaocan"), CLEAN_HEADER_BRAND);
+                        tintHeaderIcon(field(views, "ivLocation"), CLEAN_HEADER_TEXT);
+                        tintHeaderIcon(field(views, "ivIcon"), CLEAN_HEADER_TEXT);
+                        View background = asView(field(views, "titleBackground"));
+                        if (background != null) background.setBackgroundColor(Color.TRANSPARENT);
+                    }
+                    return result;
+                });
+            }
+            Class<?> head = Class.forName("com.realtech.promotion.pages.home.ext.HeadViewExtKt", false, cl);
+            for (Method method : head.getDeclaredMethods()) {
+                String name = method.getName();
+                if (!"initHeadView".equals(name) && !"showOssTheme".equals(name)
+                        && !"hideThemeBanner".equals(name) && !"renderThemePlacement".equals(name)) continue;
+                int last = method.getParameterCount() - 1;
+                if (last < 0 || !"FragmentHomeBinding".equals(method.getParameterTypes()[last].getSimpleName())) continue;
+                xposed.hook(method).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (enabled(HOME_TOP)) {
+                        View status = asView(field(chain.getArg(last), "statusBar"));
+                        paintHomeSurface(status);
+                    }
+                    return result;
+                });
+            }
+        } catch (ReflectiveOperationException | RuntimeException t) {
+            MainHook.log("Clean home header hook unavailable: " + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void hookHomeListSurface(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> page = Class.forName(
+                    "com.realtech.promotion.adapters.holder.TrafficExpBPagerPageHost", false, cl);
+            xposed.hook(page.getDeclaredMethod("onDraw", Canvas.class)).intercept(chain -> {
+                if (!enabled(HOME_TOP)) return chain.proceed();
+                // This override only paints the background; Android draws children separately.
+                ((Canvas) chain.getArg(0)).drawColor(HOME_SURFACE);
+                return null;
+            });
+        } catch (ReflectiveOperationException | RuntimeException t) {
+            MainHook.log("Home list surface hook unavailable: " + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void paintHomeSurface(View view) {
+        if (view == null) return;
+        if (!(view.getBackground() instanceof ColorDrawable)
+                || ((ColorDrawable) view.getBackground()).getColor() != HOME_SURFACE) {
+            view.setBackgroundColor(HOME_SURFACE);
+        }
+    }
+
+    private static void tintHeaderIcon(Object view, int color) {
+        if (view instanceof ImageView) ((ImageView) view).setImageTintList(ColorStateList.valueOf(color));
+    }
+
+    private static boolean isHomeTab(Activity activity) {
+        try {
+            return Integer.valueOf(0).equals(activity.getClass().getMethod("currentIndex").invoke(activity));
+        } catch (ReflectiveOperationException | RuntimeException ignored) { return false; }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static void hookHomeWindowColor(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> callback = Class.forName("com.realtech.xiaocan.MainActivity$setUpPages$1", false, cl);
+            Field owner = callback.getDeclaredField("this$0");
+            owner.setAccessible(true);
+            xposed.hook(callback.getDeclaredMethod("onPageSelected", int.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (enabled(HOME_TOP) && enabled(HOME_THEME)) {
+                    Activity activity = (Activity) owner.get(chain.getThisObject());
+                    if (activity != null && activity.getWindow() != null) {
+                        activity.getWindow().setStatusBarColor((Integer) chain.getArg(0) == 0
+                                ? HOME_SURFACE : Color.WHITE);
+                    }
+                }
+                return result;
+            });
+        } catch (ReflectiveOperationException | RuntimeException t) {
+            MainHook.log("Home window palette hook unavailable: " + t.getClass().getSimpleName());
+        }
+    }
     /**
-     * Fix status bar color: force clean white status bar with dark icons.
+     * Apply the window status bar palette without recoloring other screens.
      */
     private static void hookStatusBarAndWindow(XposedInterface xposed, ClassLoader cl) {
         try {
@@ -122,7 +234,8 @@ public final class HomePagePurifier {
                         Activity activity = (Activity) chain.getThisObject();
                         if (activity != null && activity.getWindow() != null) {
                             activity.getWindow().getDecorView().setBackgroundColor(Color.WHITE);
-                            activity.getWindow().setStatusBarColor(Color.WHITE);
+                            activity.getWindow().setStatusBarColor(LayoutSettings.isVerifiedHost3212()
+                                    && enabled(HOME_TOP) && isHomeTab(activity) ? HOME_SURFACE : Color.WHITE);
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 View decor = activity.getWindow().getDecorView();
                                 int flags = decor.getSystemUiVisibility();
@@ -134,7 +247,7 @@ public final class HomePagePurifier {
                     });
                 }
             }
-            MainHook.log("Hooked MainActivity window status bar -> pure white + dark icons");
+            MainHook.log("Hooked MainActivity window status bar palette");
         } catch (Throwable t) {
             MainHook.log("Failed to hook MainActivity status bar: " + t);
         }
@@ -144,14 +257,16 @@ public final class HomePagePurifier {
             for (Method m : fragClass.getDeclaredMethods()) {
                 if ("applyStatusBarThemeColor".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
-                        if (!enabled(HOME_THEME)) return chain.proceed();
+                        boolean cleanHeader = LayoutSettings.isVerifiedHost3212() && enabled(HOME_TOP);
+                        if (!enabled(HOME_THEME) && !cleanHeader) return chain.proceed();
                         Object binding = chain.getArg(0);
                         if (binding != null) {
                             try {
                                 Field sbField = binding.getClass().getField("statusBar");
                                 View statusBar = (View) sbField.get(binding);
                                 if (statusBar != null) {
-                                    statusBar.setBackgroundColor(Color.WHITE);
+                                    if (cleanHeader) paintHomeSurface(statusBar);
+                                    else statusBar.setBackgroundColor(Color.WHITE);
                                 }
                             } catch (Throwable ignored) {}
                         }
@@ -323,7 +438,10 @@ public final class HomePagePurifier {
                                     try {
                                         Field sbField = arg.getClass().getField("statusBar");
                                         View sb = (View) sbField.get(arg);
-                                        if (sb != null && enabled(HOME_THEME)) sb.setBackgroundColor(Color.WHITE);
+                                        if (sb != null) {
+                                            if (LayoutSettings.isVerifiedHost3212()) paintHomeSurface(sb);
+                                            else if (enabled(HOME_THEME)) sb.setBackgroundColor(Color.WHITE);
+                                        }
                                     } catch (Throwable ignored) {}
                                 }
                             }
@@ -353,7 +471,10 @@ public final class HomePagePurifier {
                                     try {
                                         Field sbField = arg.getClass().getField("statusBar");
                                         View sb = (View) sbField.get(arg);
-                                        if (sb != null && enabled(HOME_THEME)) sb.setBackgroundColor(Color.WHITE);
+                                        if (sb != null) {
+                                            if (LayoutSettings.isVerifiedHost3212()) paintHomeSurface(sb);
+                                            else if (enabled(HOME_THEME)) sb.setBackgroundColor(Color.WHITE);
+                                        }
                                     } catch (Throwable ignored) {}
                                 }
                             }
@@ -539,23 +660,35 @@ public final class HomePagePurifier {
                 boolean bulk = "submitList".equals(name) || "setItems".equals(name) || "addAll".equals(name);
                 if (!bulk && !"add".equals(name) && !"set".equals(name)) continue;
                 xposed.hook(m).intercept(chain -> {
-                    if (!enabled(HOME_FEED)) return chain.proceed();
                     if (!type.isInstance(chain.getThisObject())) return chain.proceed();
+                    boolean ads = enabled(HOME_FEED);
+                    boolean coupons = LayoutSettings.isVerifiedHost3212() && enabled(HOME_BRAND_COUPON)
+                            && HomeBrandCoupons.isHomeAdapter(chain.getThisObject());
+                    if (!ads && !coupons) return chain.proceed();
                     Object[] args = chain.getArgs().toArray();
                     if (bulk) {
                         for (int i = 0; i < args.length; i++) {
                             if (!(args[i] instanceof java.util.Collection)) continue;
                             java.util.ArrayList<Object> clean = new java.util.ArrayList<>();
-                            for (Object item : (java.util.Collection<?>) args[i])
-                                if (!isAdFeedItem(item)) clean.add(item);
+                            for (Object item : (java.util.Collection<?>) args[i]) {
+                                if (ads && isAdFeedItem(item)) continue;
+                                Object shown = coupons ? HomeBrandCoupons.filter(item) : item;
+                                if (shown != null || item == null) clean.add(shown);
+                            }
                             args[i] = clean;
                         }
-                    } else if (args.length > 0 && isAdFeedItem(args[args.length - 1])) {
-                        if ("set".equals(name)) {
-                            type.getSuperclass().getMethod("removeAt", int.class)
-                                .invoke(chain.getThisObject(), args[0]);
+                    } else if (args.length > 0) {
+                        int last = args.length - 1;
+                        Object item = args[last];
+                        Object shown = ads && isAdFeedItem(item) ? null : coupons ? HomeBrandCoupons.filter(item) : item;
+                        if (item != null && shown == null) {
+                            if ("set".equals(name)) {
+                                type.getSuperclass().getMethod("removeAt", int.class)
+                                        .invoke(chain.getThisObject(), args[0]);
+                            }
+                            return null;
                         }
-                        return null;
+                        args[last] = shown;
                     }
                     return chain.proceed(args);
                 });
@@ -648,6 +781,8 @@ public final class HomePagePurifier {
                     return chain.proceed();
                 });
             }
+        } catch (ClassNotFoundException ignored) {
+            // 3.23.0 no longer ships this home banner producer.
         } catch (Throwable t) { MainHook.log("Home live order banner hook: " + t); }
     }
 
@@ -915,6 +1050,15 @@ public final class HomePagePurifier {
             if (root == null) return;
             enforceHome(binding);
             if (watchedHomes.put(root, Boolean.TRUE) == null) {
+                if (LayoutSettings.isVerifiedHost3212() && enabled(HOME_TOP)) {
+                    paintHomeSurface(root);
+                    paintHomeSurface(asView(field(binding, "refresh")));
+                    paintHomeSurface(findViewByName(root, "traffic_exp_b_app_bar"));
+                    paintHomeSurface(findViewByName(root, "traffic_exp_b_content"));
+                    paintHomeSurface(findViewByName(root, "layout_traffic_exp_b_pager"));
+                    View filterBg = findViewByName(root, "view_traffic_exp_c_filter_area_bg");
+                    if (filterBg != null) filterBg.setBackgroundTintList(ColorStateList.valueOf(HOME_SURFACE));
+                }
                 if (liveViews) HomeLiveLayoutWatch.attach(root, binding, HomePagePurifier::enforceHome);
                 else root.getViewTreeObserver().addOnGlobalLayoutListener(() -> enforceHome(binding));
                 MainHook.log("Home persistent layout guard attached");
@@ -934,6 +1078,10 @@ public final class HomePagePurifier {
         if (!liveViews && enabled(HOME_BOTTOM)) collapseView(asView(field(field(binding, "layoutBottom"), "layoutBottomPlacement")));
         View rv = asView(field(binding, "rv"));
         View toolbar = asView(field(binding, "toolBar"));
+        if (LayoutSettings.isVerifiedHost3212() && enabled(HOME_TOP)) {
+            paintHomeSurface(asView(field(binding, "statusBar")));
+            paintHomeSurface(toolbar);
+        }
         trackToolbarHint(toolbar);
         if (liveViews && !collapseWholeHeader()) HomeLiveViews.restorePadding(rv);
         if (collapseWholeHeader() && rv != null && toolbar != null && toolbar.getHeight() > 0) {

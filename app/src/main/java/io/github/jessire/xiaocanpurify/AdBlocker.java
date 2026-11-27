@@ -31,7 +31,40 @@ public final class AdBlocker {
         hookFloatingAds(xposed, classLoader);
         hookSearchRightBanner(xposed, classLoader);
         hookFlutterAdPlugins(xposed, classLoader);
+        hookInterstitialAdapter(xposed, classLoader);
         hookAdActivities(xposed);
+    }
+
+    /**
+     * 3.23.0 routes Lynx, Flutter, game and native interstitials through one adapter.
+     * Reward videos are user-initiated and stay untouched.
+     */
+    private static void hookInterstitialAdapter(XposedInterface xposed, ClassLoader cl) {
+        try {
+            Class<?> adapter = Class.forName("com.realtech.xiaocan.sigmob.InterstitialAdAdapter", false, cl);
+            Class<?> callback = Class.forName("com.realtech.common.service.AdCallback", false, cl);
+            Method onError = callback.getMethod("onError", String.class);
+            Method show = adapter.getDeclaredMethod("show", String.class, callback);
+            Method preload = adapter.getDeclaredMethod("preload", String.class, callback);
+            XposedInterface.Hooker block = chain -> {
+                Object cb = chain.getArg(1);
+                if (cb != null) {
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                        try {
+                            onError.invoke(cb, "purified");
+                        } catch (Throwable ignored) {}
+                    });
+                }
+                return null;
+            };
+            xposed.hook(show).intercept(block);
+            xposed.hook(preload).intercept(block);
+            MainHook.log("Hooked InterstitialAdAdapter.show/preload");
+        } catch (ClassNotFoundException ignored) {
+            // Not present before 3.23.0.
+        } catch (Throwable t) {
+            MainHook.log("Interstitial adapter hook unavailable: " + t.getClass().getSimpleName());
+        }
     }
 
     private static boolean allAdSdkPlacementsEnabled() {
@@ -335,15 +368,19 @@ public final class AdBlocker {
             MainHook.log("Hooked NativeAd");
         } catch (Throwable ignored) {}
 
-        // WMBannerView
         try {
             Class<?> wmBannerView = Class.forName("com.windmill.sdk.banner.WMBannerView", false, cl);
-            for (Method m : wmBannerView.getDeclaredMethods()) {
-                if ("loadAd".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> null);
+            for (Method m : wmBannerView.getMethods()) {
+                if ("loadAd".equals(m.getName()) && m.getReturnType() == void.class
+                        && m.getParameterCount() == 1
+                        && "WMBannerAdRequest".equals(m.getParameterTypes()[0].getSimpleName())) {
+                    // The newer SDK declares this method on the parent class.
+                    xposed.hook(m).intercept(chain -> wmBannerView.isInstance(chain.getThisObject())
+                            && allAdSdkPlacementsEnabled() ? null : chain.proceed());
+                    MainHook.log("Hooked banner loadAd: " + m.getDeclaringClass().getSimpleName());
+                    break;
                 }
             }
-            MainHook.log("Hooked WMBannerView.loadAd");
         } catch (Throwable ignored) {}
 
     }
@@ -366,7 +403,8 @@ public final class AdBlocker {
     }
 
     private static boolean isAdActivityName(String lowerName) {
-        return lowerName.contains("ttfulladactivity")
+        return lowerName.equals("com.realtech.advert.interstitialadhostactivity")
+                || lowerName.contains("ttfulladactivity")
                 || lowerName.contains("tobidrewardvideoactivity")
                 || lowerName.contains("douyindramaactivity")
                 || lowerName.contains("openadsdk")

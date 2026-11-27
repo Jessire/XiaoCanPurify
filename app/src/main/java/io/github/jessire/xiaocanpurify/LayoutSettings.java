@@ -32,7 +32,8 @@ final class LayoutSettings {
 
     // UI categories and counts are derived from this registry. Item names are stored keys.
     enum Item {
-        NAV_EXTRA(Category.NAV, "精简为首页、订单、我的（关闭底栏推广）"),
+        NAV_EXTRA(Category.NAV, "精简底栏（关闭推广标签）"),
+        NAV_HIDE_ORDER(Category.NAV, "隐藏底栏「订单」"),
         MAIN_FLOAT(Category.NAV, "隐藏主界面浮动推广"),
         HOME_THEME(Category.HOME, "净化状态栏与节日主题"),
         HOME_SEARCH_HINT(Category.HOME, "隐藏搜索框营销词"),
@@ -40,6 +41,7 @@ final class LayoutSettings {
         HOME_TOP(Category.HOME, "隐藏顶部横幅与推广背景"),
         HOME_MENUS(Category.HOME, "隐藏红包快捷菜单"),
         HOME_FEED(Category.HOME, "隐藏信息流推广"),
+        HOME_BRAND_COUPON(Category.HOME, "屏蔽首页大牌券专享活动"),
         HOME_ORDER(Category.HOME, "隐藏顶部订单推广横幅"),
         HOME_FAB(Category.HOME, "隐藏红包／新手等浮动入口"),
         HOME_BOTTOM(Category.HOME, "隐藏底部推广与提示"),
@@ -53,7 +55,7 @@ final class LayoutSettings {
         ORDER_FOOD_DETECTIVE_PAGE(Category.ORDER, "屏蔽新店推荐任务网页（含手动打开）"),
         ORDER_TIP(Category.ORDER, "隐藏订单提示横幅"),
         ORDER_REWARD(Category.ORDER, "隐藏奖励类操作按钮"),
-        DETAIL_AD(Category.DETAIL, "隐藏 ToBid 广告与占位"),
+        DETAIL_AD(Category.DETAIL, "隐藏详情广告、占位和促销气泡"),
         DETAIL_FOOD_DETECTIVE_AUTO_JUMP(Category.DETAIL, "阻止详情离开时自动打开新店推荐任务"),
         DETAIL_FOOD_DETECTIVE_WEB_EXIT(Category.ORDER, "关闭新店推荐任务的网页退出挽留"),
         DETAIL_SHARE(Category.DETAIL, "隐藏「分享赚豆」入口"),
@@ -82,6 +84,10 @@ final class LayoutSettings {
         }
     }
 
+    static boolean defaultEnabled(Item item) {
+        return item != Item.NAV_HIDE_ORDER;
+    }
+
     private static final String FILE = "xiaocanpurify_layout_settings";
     // A cold-start snapshot keeps adapter data, dimensions and tab indices consistent.
     private static volatile EnumSet<Item> active;
@@ -90,6 +96,7 @@ final class LayoutSettings {
     private static volatile HotRules liveRules;
     private static final CopyOnWriteArrayList<Runnable> LIVE_LISTENERS = new CopyOnWriteArrayList<>();
     private static final EnumSet<Item> HOT = EnumSet.of(
+            Item.NAV_HIDE_ORDER,
             Item.ORDER_FOOD_DETECTIVE_PAGE, Item.DETAIL_FOOD_DETECTIVE_AUTO_JUMP,
             Item.DETAIL_FOOD_DETECTIVE_WEB_EXIT, Item.HOME_FREE_ORDER_POPUP,
             Item.HOME_SEARCH_HINT, Item.HOME_SEARCH_BANNER, Item.HOME_MENUS,
@@ -155,13 +162,13 @@ final class LayoutSettings {
         if (snapshot != null && verifiedHost3212 && rules != null && HOT.contains(item)) {
             return rules.items.contains(item);
         }
-        return snapshot == null || snapshot.contains(item);
+        return snapshot == null ? defaultEnabled(item) : snapshot.contains(item);
     }
 
     // Startup side effects must not react to a change of a live rule mid-process.
     static boolean coldEnabled(Item item) {
         EnumSet<Item> snapshot = active;
-        return snapshot == null || snapshot.contains(item);
+        return snapshot == null ? defaultEnabled(item) : snapshot.contains(item);
     }
 
     static boolean hasBaseline() { return active != null; }
@@ -235,7 +242,7 @@ final class LayoutSettings {
     private static boolean isVerifiedHost3212(Context context) {
         try {
             PackageInfo info = context.getPackageManager().getPackageInfo(MainHook.TARGET_PACKAGE, 0);
-            return "3.21.2".equals(info.versionName) && info.versionCode == 2985;
+            return HostVersions.isSupported(info.versionName, info.versionCode);
         } catch (PackageManager.NameNotFoundException | RuntimeException e) {
             return false;
         }
@@ -244,7 +251,7 @@ final class LayoutSettings {
     static EnumMap<Item, Boolean> read(Context context) {
         SharedPreferences prefs = preferences(context);
         EnumMap<Item, Boolean> result = new EnumMap<>(Item.class);
-        for (Item item : Item.values()) result.put(item, prefs.getBoolean(item.key, true));
+        for (Item item : Item.values()) result.put(item, prefs.getBoolean(item.key, defaultEnabled(item)));
         return result;
     }
 
