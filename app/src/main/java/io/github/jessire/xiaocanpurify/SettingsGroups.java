@@ -64,10 +64,14 @@ final class SettingsGroups {
                 case USER_MATCH:
                 case USER_PROFIT:
                 case USER_VIP:
+                case VIP_HIDE_SVIP:
                 case WITHDRAW_FOLLOW:
                     return PROFILE;
                 case NAV_EXTRA:
+                case NAV_HIDE_HOME:
                 case NAV_HIDE_ORDER:
+                case NAV_HIDE_VIP:
+                case NAV_HIDE_TASK:
                 case MAIN_FLOAT:
                     return GLOBAL;
                 default:
@@ -88,7 +92,8 @@ final class SettingsGroups {
 
     enum Group {
         NAV(Section.MAIN, "底栏与主界面推广", "精简底栏，隐藏主界面浮层",
-                Item.NAV_EXTRA, Item.NAV_HIDE_ORDER, Item.MAIN_FLOAT),
+                Item.NAV_EXTRA, Item.NAV_HIDE_HOME, Item.NAV_HIDE_ORDER, Item.NAV_HIDE_VIP,
+                Item.NAV_HIDE_TASK, Item.MAIN_FLOAT),
         HOME_PROMOTIONS(Section.MAIN, "首页推广", "搜索营销、横幅、红包与启动免单",
                 Item.HOME_SEARCH_HINT, Item.HOME_SEARCH_BANNER, Item.HOME_TOP, Item.HOME_MENUS,
                 Item.HOME_FEED, Item.HOME_BRAND_COUPON, Item.HOME_ORDER, Item.HOME_FAB, Item.HOME_BOTTOM,
@@ -105,7 +110,8 @@ final class SettingsGroups {
                 Item.DETAIL_AD, Item.DETAIL_SHARE),
         PROFILE_PROMOTIONS(Section.PROFILE, "我的推广", "广告、公告、奖励与会员轮播",
                 Item.USER_AD, Item.USER_COMMERCE, Item.USER_NOTICE, Item.USER_FLOAT,
-                Item.USER_BONUS, Item.USER_NEW, Item.USER_MATCH, Item.USER_PROFIT, Item.USER_VIP),
+                Item.USER_BONUS, Item.USER_NEW, Item.USER_MATCH, Item.USER_PROFIT, Item.USER_VIP,
+                Item.VIP_HIDE_SVIP),
         PROFILE_SHORTCUTS(Section.PROFILE, "我的菜单与服务", "隐藏快捷菜单、商家入口和服务区",
                 Item.USER_MENU, Item.USER_MERCHANT, Item.USER_SERVICE),
         WITHDRAW(Section.PROFILE, "提现关注提示", "关闭提现成功后的公众号推广",

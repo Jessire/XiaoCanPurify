@@ -32,8 +32,11 @@ final class LayoutSettings {
 
     // UI categories and counts are derived from this registry. Item names are stored keys.
     enum Item {
-        NAV_EXTRA(Category.NAV, "精简底栏（关闭推广标签）"),
+        NAV_EXTRA(Category.NAV, "屏蔽底栏推广标签（购物返利等）"),
+        NAV_HIDE_HOME(Category.NAV, "隐藏底栏「首页」"),
         NAV_HIDE_ORDER(Category.NAV, "隐藏底栏「订单」"),
+        NAV_HIDE_VIP(Category.NAV, "隐藏底栏「会员」"),
+        NAV_HIDE_TASK(Category.NAV, "隐藏底栏「福利」"),
         MAIN_FLOAT(Category.NAV, "隐藏主界面浮动推广"),
         HOME_THEME(Category.HOME, "净化状态栏与节日主题"),
         HOME_SEARCH_HINT(Category.HOME, "隐藏搜索框营销词"),
@@ -71,6 +74,7 @@ final class LayoutSettings {
         USER_MATCH(Category.PROFILE, "隐藏个人中心图片推广"),
         USER_PROFIT(Category.PROFILE, "隐藏「赚钱」入口和待领徽标"),
         USER_VIP(Category.PROFILE, "隐藏提现旁的会员轮播"),
+        VIP_HIDE_SVIP(Category.PROFILE, "屏蔽会员页「激活SVIP」标签"),
         WITHDRAW_FOLLOW(Category.WITHDRAW, "自动关闭提现成功页的公众号关注推广");
 
         final Category category;
@@ -85,7 +89,25 @@ final class LayoutSettings {
     }
 
     static boolean defaultEnabled(Item item) {
-        return item != Item.NAV_HIDE_ORDER;
+        switch (item) {
+            // 默认沿用旧版观感：底栏只留首页、订单、我的。
+            case NAV_HIDE_VIP:
+            case NAV_HIDE_TASK:
+                return true;
+            case NAV_HIDE_HOME:
+            case NAV_HIDE_ORDER:
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    /** 底栏标签是否要隐藏；「首页」在其余三项都被隐藏时保留，避免底栏只剩一项。 */
+    static boolean tabHidden(Item item) {
+        if (!enabled(item)) return false;
+        if (item != Item.NAV_HIDE_HOME) return true;
+        return !(enabled(Item.NAV_HIDE_ORDER) && enabled(Item.NAV_HIDE_VIP)
+                && enabled(Item.NAV_HIDE_TASK));
     }
 
     private static final String FILE = "xiaocanpurify_layout_settings";
@@ -96,7 +118,7 @@ final class LayoutSettings {
     private static volatile HotRules liveRules;
     private static final CopyOnWriteArrayList<Runnable> LIVE_LISTENERS = new CopyOnWriteArrayList<>();
     private static final EnumSet<Item> HOT = EnumSet.of(
-            Item.NAV_HIDE_ORDER,
+            Item.NAV_HIDE_HOME, Item.NAV_HIDE_ORDER, Item.NAV_HIDE_VIP, Item.NAV_HIDE_TASK,
             Item.ORDER_FOOD_DETECTIVE_PAGE, Item.DETAIL_FOOD_DETECTIVE_AUTO_JUMP,
             Item.DETAIL_FOOD_DETECTIVE_WEB_EXIT, Item.HOME_FREE_ORDER_POPUP,
             Item.HOME_SEARCH_HINT, Item.HOME_SEARCH_BANNER, Item.HOME_MENUS,
@@ -106,6 +128,7 @@ final class LayoutSettings {
             Item.USER_AD, Item.USER_COMMERCE, Item.USER_NOTICE, Item.USER_FLOAT,
             Item.USER_BONUS, Item.USER_NEW, Item.USER_MENU, Item.USER_MERCHANT,
             Item.USER_SERVICE, Item.USER_MATCH, Item.USER_PROFIT, Item.USER_VIP,
+            Item.VIP_HIDE_SVIP,
             Item.WITHDRAW_FOLLOW);
 
     static final class HotRules {

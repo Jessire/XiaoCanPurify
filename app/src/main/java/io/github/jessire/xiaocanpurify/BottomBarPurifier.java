@@ -2,33 +2,46 @@ package io.github.jessire.xiaocanpurify;
 
 import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.MAIN_FLOAT;
 import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_EXTRA;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_HIDE_HOME;
 import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_HIDE_ORDER;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_HIDE_TASK;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.Item.NAV_HIDE_VIP;
 import static io.github.jessire.xiaocanpurify.LayoutSettings.enabled;
+import static io.github.jessire.xiaocanpurify.LayoutSettings.tabHidden;
 
 import android.app.Activity;
-import android.os.Bundle;
 import android.view.View;
-import android.view.ViewGroup;
 
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
 
 import io.github.libxposed.api.XposedInterface;
 
+/**
+ * 底栏按「首页 / 订单 / 会员 / 福利 / 我的」逐个独立显隐。
+ *
+ * <p>小蚕的五个标签是同一条 LinearLayout 里等宽（weight=1）的 BottomBarItem。把某一位设为
+ * GONE，其余标签会自动重新均分宽度，而 navView 与 viewPager2 的下标完全不变，所以不需要
+ * 移除视图、也不需要裁剪适配器列表。这样宿主内部按位置跳转的逻辑（订单、会员、元宝）继续
+ * 成立，开关也能即时生效。
+ *
+ * <p>「我的」不提供开关：设置入口（模块设置）就挂在那一页，隐藏后用户无法自查。
+ * 若四项都打开，「首页」会被保留，避免底栏只剩一项。
+ */
 public final class BottomBarPurifier {
+    /** 底栏位置：0 首页、1 订单、2 会员、3 福利、4 我的。 */
+    private static final String[] TAB_FIELDS = {"nbiHome", "nbiTd", "nbiVip", "nbiBenefit", "nbiUser"};
+    private static final LayoutSettings.Item[] TAB_RULES = {
+            NAV_HIDE_HOME, NAV_HIDE_ORDER, NAV_HIDE_VIP, NAV_HIDE_TASK, null};
+
     private BottomBarPurifier() {}
 
     public static void install(XposedInterface xposed, ClassLoader classLoader) {
-        hookTabActionList(xposed, classLoader);
-        hookMainActivitySetupPages(xposed, classLoader);
-        hookOnItemSelectedListener(xposed, classLoader);
-        hookChangeTabIndex(xposed, classLoader);
-        hookApplyBottomTabTheme(xposed, classLoader);
-        hookSecondTabPlacement(xposed, classLoader);
         hookShoppingRebateTab(xposed, classLoader);
+        hookSecondTabPlacement(xposed, classLoader);
+        hookMainActivitySetupPages(xposed, classLoader);
+        hookApplyBottomTabTheme(xposed, classLoader);
+        hookChangeTabIndex(xposed, classLoader);
     }
 
     /** 3.23.0 swaps tab 1 for a "购物返利" page through a remote feature switch. */
@@ -45,50 +58,7 @@ public final class BottomBarPurifier {
         }
     }
 
-    /**
-     * Hook MainActivity.getTabActionList() to return only HOME, ORDER, and USER.
-     */
-    private static void hookTabActionList(XposedInterface xposed, ClassLoader cl) {
-        try {
-            Class<?> mainActivityClass = Class.forName("com.realtech.xiaocan.MainActivity", false, cl);
-            Class<?> tabActionHome = Class.forName("com.realtech.xiaocan.MainTabAction$HOME", false, cl);
-            Class<?> tabActionOrder = Class.forName("com.realtech.xiaocan.MainTabAction$ORDER", false, cl);
-            Class<?> tabActionUser = Class.forName("com.realtech.xiaocan.MainTabAction$USER", false, cl);
-
-            Object homeInstance = tabActionHome.getField("INSTANCE").get(null);
-            Object orderInstance = null;
-            try {
-                orderInstance = tabActionOrder.getField("INSTANCE").get(null);
-            } catch (Throwable ignored) {
-                orderInstance = tabActionOrder.getField("ORDER").get(null);
-            }
-            Object userInstance = tabActionUser.getField("INSTANCE").get(null);
-
-            final Object fHome = homeInstance;
-            final Object fOrder = orderInstance;
-            final Object fUser = userInstance;
-
-            for (Method m : mainActivityClass.getDeclaredMethods()) {
-                if ("getTabActionList".equals(m.getName()) || "tabActionList_delegate$lambda$0".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        if (!enabled(NAV_EXTRA)) return chain.proceed();
-                        List<Object> threeTabs = new ArrayList<>(3);
-                        threeTabs.add(fHome);
-                        threeTabs.add(fOrder);
-                        threeTabs.add(fUser);
-                        return threeTabs;
-                    });
-                    MainHook.log("Hooked " + m.getName() + " to 3 tabs [HOME, ORDER, USER]");
-                }
-            }
-        } catch (Throwable t) {
-            MainHook.log("Failed to hook tabActionList: " + t);
-        }
-    }
-
-    /**
-     * Prevent dynamic replacement of Tab 1 (Order) with marketing placements such as "抖音补贴".
-     */
+    /** Prevent dynamic replacement of Tab 1 (Order) with marketing placements such as "抖音补贴". */
     private static void hookSecondTabPlacement(XposedInterface xposed, ClassLoader cl) {
         try {
             Class<?> mainActivityClass = Class.forName("com.realtech.xiaocan.MainActivity", false, cl);
@@ -110,9 +80,6 @@ public final class BottomBarPurifier {
         }
     }
 
-    /**
-     * Hook MainActivity.setUpPages to remove VIP and Benefit tabs AFTER ViewBinding has completed.
-     */
     private static void hookMainActivitySetupPages(XposedInterface xposed, ClassLoader cl) {
         try {
             Class<?> mainActivityClass = Class.forName("com.realtech.xiaocan.MainActivity", false, cl);
@@ -120,8 +87,7 @@ public final class BottomBarPurifier {
                 if ("setUpPages".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
                         Object result = chain.proceed();
-                        Activity activity = (Activity) chain.getThisObject();
-                        purgeExtraTabs(activity);
+                        bindTabs((Activity) chain.getThisObject());
                         return result;
                     });
                     MainHook.log("Hooked MainActivity.setUpPages");
@@ -140,8 +106,7 @@ public final class BottomBarPurifier {
                 if ("applyBottomTabTheme".equals(m.getName())) {
                     xposed.hook(m).intercept(chain -> {
                         Object result = chain.proceed();
-                        Activity activity = (Activity) chain.getThisObject();
-                        purgeExtraTabs(activity);
+                        bindTabs((Activity) chain.getThisObject());
                         return result;
                     });
                     MainHook.log("Hooked MainActivity.applyBottomTabTheme");
@@ -151,219 +116,117 @@ public final class BottomBarPurifier {
         } catch (Throwable ignored) {}
     }
 
-    private static void purgeExtraTabs(Activity activity) {
-        if (!enabled(NAV_EXTRA) && !enabled(MAIN_FLOAT) && !LayoutSettings.isVerifiedHost3212()) return;
+    /** 把四个可隐藏标签绑到各自的开关键上；已绑定过的视图会在开关变化时自动刷新。 */
+    private static void bindTabs(Activity activity) {
+        if (activity == null) return;
         try {
-            Method getBinding = activity.getClass().getMethod("getBinding");
-            Object binding = getBinding.invoke(activity);
+            Object binding = activity.getClass().getMethod("getBinding").invoke(activity);
             if (binding == null) return;
-            if (LayoutSettings.isVerifiedHost3212()) {
-                View secondTab = (View) binding.getClass().getField("nbiTd").get(binding);
-                trackOrderTab(activity, secondTab);
-            }
-
-            if (enabled(MAIN_FLOAT)) {
-                // Hide floating red packet icon on main activity
-                try {
-                    Field ivFloatingWindowField = binding.getClass().getField("ivFloatingWindow");
-                    View v = (View) ivFloatingWindowField.get(binding);
-                    if (v != null) v.setVisibility(View.GONE);
-                } catch (Throwable ignored) {}
-            }
-            if (!enabled(NAV_EXTRA)) return;
-
-            Field navViewField = binding.getClass().getField("navView");
-            ViewGroup navView = (ViewGroup) navViewField.get(binding);
-
-            Field nbiVipField = binding.getClass().getField("nbiVip");
-            View nbiVip = (View) nbiVipField.get(binding);
-
-            Field nbiBenefitField = binding.getClass().getField("nbiBenefit");
-            View nbiBenefit = (View) nbiBenefitField.get(binding);
-
-            Field nbiTdField = binding.getClass().getField("nbiTd");
-            View nbiTd = (View) nbiTdField.get(binding);
-
-            // Hide VIP decorations / badges
-            try {
-                Field lyActiveVip = binding.getClass().getField("lyActiveVip");
-                View v = (View) lyActiveVip.get(binding);
-                if (v != null) v.setVisibility(View.GONE);
-            } catch (Throwable ignored) {}
-
-            try {
-                Field tvVipExpire = binding.getClass().getField("tvVipExpireTag");
-                View v = (View) tvVipExpire.get(binding);
-                if (v != null) v.setVisibility(View.GONE);
-            } catch (Throwable ignored) {}
-
-            if (navView != null) {
-                if (nbiVip != null) {
-                    nbiVip.setVisibility(View.GONE);
-                    navView.removeView(nbiVip);
+            for (int i = 0; i < TAB_FIELDS.length; i++) {
+                View tab = readView(binding, TAB_FIELDS[i]);
+                if (tab == null) continue;
+                LayoutSettings.Item rule = TAB_RULES[i];
+                if (rule == null) {
+                    // 「我的」始终保留，它是设置与订单的兜底入口。
+                    tab.setVisibility(View.VISIBLE);
+                    continue;
                 }
-                if (nbiBenefit != null) {
-                    nbiBenefit.setVisibility(View.GONE);
-                    navView.removeView(nbiBenefit);
-                }
-                if (nbiTd != null) {
-                    try {
-                        Method setItemKey = nbiTd.getClass().getMethod("setItemKey", String.class);
-                        setItemKey.invoke(nbiTd, "order");
-                    } catch (Throwable ignored) {}
-                }
-                Method initMethod = navView.getClass().getMethod("init");
-                initMethod.invoke(navView);
-                MainHook.log("navView purged and re-initialized with 3 items");
+                HomeLiveViews.track(tab, () -> tabHidden(rule), false, false);
             }
+            if (enabled(MAIN_FLOAT)) hide(readView(binding, "ivFloatingWindow"));
+            if (tabHidden(NAV_HIDE_VIP)) {
+                hide(readView(binding, "lyActiveVip"));
+                hide(readView(binding, "tvVipExpireTag"));
+            }
+            if (!tabHidden(NAV_HIDE_ORDER)) keepOrderKey(binding);
+            moveOffHiddenTab(binding);
+            MainHook.log("Bottom bar tabs bound");
         } catch (Throwable t) {
-            MainHook.log("Failed to purge extra tabs: " + t);
+            MainHook.log("Failed to bind bottom tabs: " + t.getClass().getSimpleName());
         }
     }
 
-    private static void trackOrderTab(Activity activity, View secondTab) {
-        // GONE frees layout space without removing the tab from the host's position table.
-        WeakReference<Activity> owner = new WeakReference<>(activity);
-        HomeLiveViews.track(secondTab, () -> enabled(NAV_HIDE_ORDER) && isOrderTab(owner.get()),
-                false, false);
+    /** 关掉「购物返利」后，第二格必须仍然是订单，否则点进去是别的页面。 */
+    private static void keepOrderKey(Object binding) {
+        View second = readView(binding, "nbiTd");
+        if (second == null) return;
+        try {
+            second.getClass().getMethod("setItemKey", String.class).invoke(second, "order");
+        } catch (ReflectiveOperationException | RuntimeException ignored) {}
     }
 
-    private static boolean isOrderTab(Activity activity) {
-        if (activity == null) return false;
-        if (enabled(NAV_EXTRA)) return true;
+    /** 当前停在被隐藏的标签上时，切到第一个仍可见的位置。 */
+    private static void moveOffHiddenTab(Object binding) {
         try {
-            Field pager = activity.getClass().getDeclaredField("tabPagerAdapter");
-            pager.setAccessible(true);
-            Object adapter = pager.get(activity);
-            if (adapter == null) return false;
-            Object tab = adapter.getClass().getMethod("getTab", int.class).invoke(adapter, 1);
-            return tab != null && "com.realtech.xiaocan.MainTabAction$ORDER".equals(tab.getClass().getName());
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-            return false;
-        }
-    }
-
-
-    /**
-     * Hook MainActivity$setUpPages$2.onItemSelected to handle tab clicks cleanly:
-     * 0 -> Home (viewPager2 item 0)
-     * 1 -> Order (viewPager2 item 1)
-     * 2 -> User ("我的", viewPager2 item 2)
-     */
-    private static void hookOnItemSelectedListener(XposedInterface xposed, ClassLoader cl) {
-        try {
-            Class<?> listenerClass = Class.forName("com.realtech.xiaocan.MainActivity$setUpPages$2", false, cl);
-            for (Method m : listenerClass.getDeclaredMethods()) {
-                if ("onItemSelected".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        if (!enabled(NAV_EXTRA)) return chain.proceed();
-                        int currentPos = (int) chain.getArg(2);
-                        Field this$0Field = listenerClass.getDeclaredField("this$0");
-                        this$0Field.setAccessible(true);
-                        Activity mainActivity = (Activity) this$0Field.get(chain.getThisObject());
-                        if (mainActivity != null) {
-                            Method getBinding = mainActivity.getClass().getMethod("getBinding");
-                            Object binding = getBinding.invoke(mainActivity);
-                            if (binding != null) {
-                                Field vpField = binding.getClass().getField("viewPager2");
-                                Object viewPager2 = vpField.get(binding);
-                                Method setCurrentItem = viewPager2.getClass().getMethod("setCurrentItem", int.class, boolean.class);
-
-                                Field navViewField = binding.getClass().getField("navView");
-                                Object navView = navViewField.get(binding);
-                                Method updateTabState = navView.getClass().getMethod("updateTabState", int.class);
-
-                                if (currentPos == 0) {
-                                    setCurrentItem.invoke(viewPager2, 0, false);
-                                    updateTabState.invoke(navView, 0);
-                                    MainHook.log("Switched to Home tab (position 0)");
-                                    return false;
-                                } else if (currentPos == 1) {
-                                    setCurrentItem.invoke(viewPager2, 1, false);
-                                    updateTabState.invoke(navView, 1);
-                                    MainHook.log("Switched to Order tab (position 1)");
-                                    return false;
-                                } else if (currentPos == 2) {
-                                    switchToUserTab(mainActivity);
-                                    updateTabState.invoke(navView, 2);
-                                    MainHook.log("Switched to User tab (position 2)");
-                                    return false;
-                                }
-                            }
-                        }
-                        return chain.proceed();
-                    });
-                    MainHook.log("Hooked MainActivity$setUpPages$2.onItemSelected");
-                    break;
+            Object pager = read(binding, "viewPager2");
+            if (pager == null) return;
+            int current = (int) pager.getClass().getMethod("getCurrentItem").invoke(pager);
+            if (!tabHiddenAt(current)) return;
+            for (int i = 0; i < TAB_RULES.length; i++) {
+                if (tabHiddenAt(i)) continue;
+                pager.getClass().getMethod("setCurrentItem", int.class, boolean.class)
+                        .invoke(pager, i, false);
+                Object nav = read(binding, "navView");
+                if (nav != null) {
+                    nav.getClass().getMethod("updateTabState", int.class).invoke(nav, i);
                 }
+                MainHook.log("Moved off hidden tab to position " + i);
+                return;
             }
-        } catch (Throwable t) {
-            MainHook.log("Failed to hook MainActivity$setUpPages$2.onItemSelected: " + t);
-        }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {}
     }
 
-    private static void switchToUserTab(Activity mainActivity) {
-        try {
-            // Track source
-            try {
-                Class<?> trackClass = Class.forName("com.realtech.track.Track", false, mainActivity.getClassLoader());
-                Object trackInstance = trackClass.getField("INSTANCE").get(null);
-                Method setFromSource = trackClass.getMethod("setFromSource", String.class);
-                setFromSource.invoke(trackInstance, "我的");
-            } catch (Throwable ignored) {}
-
-            // fetchKeFuUnread
-            try {
-                Method getMViewModel = mainActivity.getClass().getMethod("getMViewModel");
-                Object vm = getMViewModel.invoke(mainActivity);
-                if (vm != null) {
-                    Method fetchKeFu = vm.getClass().getMethod("fetchKeFuUnread");
-                    fetchKeFu.invoke(vm);
-                }
-            } catch (Throwable ignored) {}
-
-            // viewPager2.setCurrentItem(2, false)
-            Method getBinding = mainActivity.getClass().getMethod("getBinding");
-            Object binding = getBinding.invoke(mainActivity);
-            if (binding != null) {
-                Field vpField = binding.getClass().getField("viewPager2");
-                Object viewPager2 = vpField.get(binding);
-                if (viewPager2 != null) {
-                    Method setCurrentItem = viewPager2.getClass().getMethod("setCurrentItem", int.class, boolean.class);
-                    setCurrentItem.invoke(viewPager2, 2, false);
-                }
-            }
-        } catch (Throwable t) {
-            MainHook.log("Failed to switch to user tab: " + t);
-        }
+    private static boolean tabHiddenAt(int position) {
+        if (position < 0 || position >= TAB_RULES.length) return false;
+        LayoutSettings.Item rule = TAB_RULES[position];
+        return rule != null && tabHidden(rule);
     }
 
     /**
-     * Hook MainActivity.changeTabIndex to map position 4 ("我的" in old layout) to 2.
+     * 宿主按原始位置跳转（订单详情回订单页、元宝入口进会员页等）。目标被隐藏时不再静默失败：
+     * 「会员」改用独立页面打开元宝乐园，其余位置直接忽略，避免跳到用户已经关掉的页面。
      */
     private static void hookChangeTabIndex(XposedInterface xposed, ClassLoader cl) {
         try {
             Class<?> mainActivityClass = Class.forName("com.realtech.xiaocan.MainActivity", false, cl);
             for (Method m : mainActivityClass.getDeclaredMethods()) {
-                if ("changeTabIndex".equals(m.getName())) {
-                    xposed.hook(m).intercept(chain -> {
-                        if (!enabled(NAV_EXTRA)) return chain.proceed();
-                        int index = (int) chain.getArg(0);
-                        if (index == 4) {
-                            MainHook.log("Mapped changeTabIndex from 4 to 2");
-                            return chain.proceed(new Object[]{ 2 });
-                        } else if (index == 2 || index == 3) {
-                            MainHook.log("Ignored changeTabIndex for removed tab: " + index);
-                            return null;
+                if (!"changeTabIndex".equals(m.getName()) || m.getParameterCount() != 1) continue;
+                xposed.hook(m).intercept(chain -> {
+                    int index = (int) chain.getArg(0);
+                    if (index < 0 || index >= TAB_RULES.length) return chain.proceed();
+                    if (!tabHiddenAt(index)) return chain.proceed();
+                    if (index == 2) {
+                        Activity activity = (Activity) chain.getThisObject();
+                        if (VipEntryFallback.openPointsPark(activity)) {
+                            MainHook.log("Opened points park for the hidden Vip tab");
                         }
-                        return chain.proceed();
-                    });
-                    MainHook.log("Hooked MainActivity.changeTabIndex");
-                    break;
-                }
+                    }
+                    MainHook.log("Ignored changeTabIndex for hidden tab: " + index);
+                    return null;
+                });
+                MainHook.log("Hooked MainActivity.changeTabIndex");
+                break;
             }
         } catch (Throwable t) {
             MainHook.log("Failed to hook MainActivity.changeTabIndex: " + t);
         }
+    }
+
+    private static Object read(Object binding, String name) {
+        if (binding == null) return null;
+        try {
+            return binding.getClass().getField(name).get(binding);
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static View readView(Object binding, String name) {
+        Object value = read(binding, name);
+        return value instanceof View ? (View) value : null;
+    }
+
+    private static void hide(View view) {
+        if (view != null) view.setVisibility(View.GONE);
     }
 }

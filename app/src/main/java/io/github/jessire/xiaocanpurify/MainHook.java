@@ -182,6 +182,13 @@ public final class MainHook extends XposedModule {
         }
 
         try {
+            VipPagePurifier.install(xposed, classLoader);
+            log("VipPagePurifier installed successfully.");
+        } catch (Throwable t) {
+            log("VipPagePurifier install error: " + t);
+        }
+
+        try {
             NetworkAdInterceptor.install(xposed, classLoader);
             log("NetworkAdInterceptor installed successfully.");
         } catch (Throwable t) {
